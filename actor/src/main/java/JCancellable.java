@@ -1,4 +1,4 @@
-package np.conature;
+package np.conature.actor;
 
 import java.util.concurrent.atomic.AtomicIntegerFieldUpdater;
 

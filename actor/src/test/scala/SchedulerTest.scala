@@ -1,8 +1,8 @@
-package testing
+package np.connature.testing
 
 import org.scalatest.FlatSpec
 import scala.concurrent.duration._
-import np.conature.{ Scheduler, HashedWheelScheduler, Cancellable }
+import np.conature.actor.{ Scheduler, HashedWheelScheduler, Cancellable }
 
 class SchedulerTest extends FlatSpec {
   "A HasheWheelScheduler" should "schedule and cancel tasks" in {

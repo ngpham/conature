@@ -1,8 +1,8 @@
-package testing
+package np.conature.testing
 
 import org.scalatest.FlatSpec
 import scala.concurrent.duration.{ DurationInt, Duration }
-import np.conature.{ Behavior, ActorContext, Actor }
+import np.conature.actor.{ Behavior, ActorContext, Actor }
 
 case class Message(x: Int, peer: Actor[Message])
 

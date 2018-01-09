@@ -1,6 +1,5 @@
-package np.conature
+package np.conature.actor
 
-import java.util.concurrent.atomic.{ AtomicReference }
 import java.util.function.Consumer
 
 class MpscQueue[A] extends JMpscQueue[A] {

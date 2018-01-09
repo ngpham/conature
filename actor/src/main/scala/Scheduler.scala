@@ -1,4 +1,4 @@
-package np.conature
+package np.conature.actor
 
 import scala.concurrent.duration.{ FiniteDuration, DurationInt }
 

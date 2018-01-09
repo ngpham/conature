@@ -4,14 +4,17 @@ lazy val commonSettings = Seq(
   version := "0.1-SNAPSHOT",
   autoCompilerPlugins := true,
   javacOptions ++= CompilerOptions.javacOptions,
-  scalacOptions ++= CompilerOptions.scalacBasic ++ CompilerOptions.scalacLanguage,
-  scalacOptions --= Seq("-Xfatal-warnings"),
+  scalacOptions ++= CompilerOptions.scalacBasic,
   resolvers += ("Sonatype OSS Snapshots"
     at "https://oss.sonatype.org/content/repositories/snapshots"),
   publishTo := None
 )
 
-lazy val root = (project in file(".")).
+lazy val root = (project in file(".")).aggregate(actor, nbnet).
+  settings(name := "conature")
+
+
+lazy val actor = (project in file("actor")).
   settings(
     commonSettings,
     name := "conature",
@@ -19,3 +22,8 @@ lazy val root = (project in file(".")).
       Dependencies.scalatest % Test,
       Dependencies.scalacheck % Test)
   )
+
+lazy val nbnet = (project in file("nbnet")).
+  settings(
+    commonSettings,
+    name := "nbnet")
