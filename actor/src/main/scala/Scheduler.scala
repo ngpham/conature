@@ -1,5 +1,6 @@
 package np.conature.actor
 
+import java.util.function.Consumer
 import scala.concurrent.duration.{ FiniteDuration, DurationInt }
 
 trait Cancellable {
@@ -23,21 +24,25 @@ class HashedWheelScheduler
   @volatile private var status = 1
   private val wheelSize = 1 << wheelSizeInBits
   private val wheel = Array.fill(wheelSize)(new Bucket())
-  private val tasks = new MpscQueue[Task]()
+  private val tasks: ConQueue[Task] = new MpscQueue[Task]()
   private val wheelMask = wheelSize - 1
   private val startTime = System.nanoTime / 1000000
 
   private val timer = new Thread(new Runnable {
     private var currentTick: Int = 0
 
-    private def fetchIntoWheel(): Unit = {
-      tasks.batchConsume(1024)( (t: Task) => if (!t.isCancelled) {
+    private val _taskAct = new Consumer[Task] {
+      def accept(t: Task): Unit = if (!t.isCancelled) {
         val countdownInTicks = t.countdown + currentTick
         val countdownInCycles = countdownInTicks >> wheelSizeInBits
         val offset = countdownInTicks & wheelMask
         t.countdown = countdownInCycles   // valid abuse
         wheel(offset.asInstanceOf[Int]).add(t)
-      })
+      }
+    }
+
+    private def fetchIntoWheel(): Unit = {
+      tasks.batchConsume(1024, _taskAct)
     }
 
     override def run(): Unit = while(status == 1) {
@@ -59,7 +64,7 @@ class HashedWheelScheduler
 
   override def schedule(delay: FiniteDuration)(f: => Unit): Cancellable = {
     val task = new Task(() => f, delay.toMillis / tickDuration.toMillis)
-    tasks.add(task)
+    tasks.offer(task)
     task
   }
 

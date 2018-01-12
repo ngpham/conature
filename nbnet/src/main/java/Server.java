@@ -104,7 +104,7 @@ public class Server {
             it.remove();
           }
         }
-      }
+      } // while (isActive)
     }});
 
     inboundThread.setDaemon(true);
@@ -137,6 +137,12 @@ public class Server {
   }
 
   public void shutdown() {
+    try {
+      System.out.println("Server is shutting down.");
+      acceptor.close();
+    } catch (IOException e) {
+      System.out.println("Ignore error during server shutdown: " + e);
+    }
     isActive = false;
     asyncThread.shutdownNow();
   }

@@ -16,7 +16,7 @@ trait ActorContext { context =>
 }
 
 object ActorContext {
-  def default(): ActorContext = new ActorContext {
+  def createDefault(): ActorContext = new ActorContext {
     val executionPool = new ForkJoinPool()
     val strategy = Strategy.fromExecutorService(executionPool)
     val scheduler = new HashedWheelScheduler()

@@ -51,7 +51,6 @@ public class Reader {
       System.out.println("Exception read() at SocketChannel.");
       e.printStackTrace();
       state = ReadingHeader;
-      r = -1;
     }
     return r;
   }

@@ -1,4 +1,4 @@
-package np.conature.testing
+package np.conature.actor.testing
 
 import org.scalatest.FlatSpec
 import scala.concurrent.duration.{ DurationInt, Duration }
@@ -11,21 +11,21 @@ class TestBehavior extends Behavior[Message] {
   var msgCount = 0
   var lastMsg: Message = null
 
-  def apply(msg: Message) = {
+  def apply(msg: Message): Behavior[Message] = {
     msgCount = msgCount + 1
     lastMsg = msg
     println(s"$selfref received: $msg")
-    if (msg.peer ne null) msg.peer ! Message(msg.x, null)
-    selfref ! Message(msg.x, msg.peer)
-    if (msgCount > 2) {
-      println("enable timeout")
-      enableTimeout(1.second)
-      msgCount = 0
-    }
-    this
+    // if (msg.peer ne null) msg.peer ! Message(msg.x, null)
+    // selfref ! Message(msg.x, msg.peer)
+    // if (msgCount > 2) {
+    //   println("enable timeout")
+    //   enableTimeout(1.second)
+    //   msgCount = 0
+    // }
+    if (msg.x < 0) new NextBehavior() else this
   }
 
-  setTimeout(Duration.Undefined) {
+  setTimeout(1.second) {
     timeoutCounter += 1
     println(s"last received message: $lastMsg. timeout counts: $timeoutCounter.")
     if (timeoutCounter > 3) {
@@ -35,21 +35,35 @@ class TestBehavior extends Behavior[Message] {
   }
 }
 
+class NextBehavior extends Behavior[Message] {
+  override def apply(msg: Message): Behavior[Message] = {
+    println("Change behavior successful!")
+    // terminate()
+    this
+  }
+}
+
 class ActorTest extends FlatSpec {
   "A StateActor" should "handle timeouts and messages" in {
-    val context = ActorContext.default()
+    val context = ActorContext.createDefault()
     val a = context.create(new TestBehavior)
     val b = context.create(new TestBehavior)
 
-    a ! Message(1, b)
-    // Thread.sleep(2000)
-    a ! Message(2, b)
-    a ! Message(3, b)
+    // a ! Message(1, b)
     Thread.sleep(2000)
+    // a ! Message(2, b)
+    // a ! Message(3, b)
+    // Thread.sleep(2000)
     // a ! Message(4, b)
     // Thread.sleep(2000)
     // a ! Message(5, b)
     // Thread.sleep(4000)
+    a ! Message(-1, null)
+    b ! Message(-1, null)
+    Thread.sleep(3000)
+    a ! Message(-1, null)
+    b ! Message(-1, null)
+    Thread.sleep(3000)
     a.terminate()
     b.terminate()
     context.shutdown()

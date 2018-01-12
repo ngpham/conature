@@ -1,6 +1,8 @@
 package np.conature.actor
 
 import java.util.concurrent.Callable
+import java.util.function.Consumer
+
 import scala.util.control.NonFatal
 import scala.concurrent.duration.{ Duration, FiniteDuration }
 
@@ -45,12 +47,12 @@ trait Behavior[-T] extends Function1[T, Behavior[T]] {
 final class Actor[-A] private
     (private[this] var behavior: Behavior[A], onError: Throwable => Unit)
     (context: ActorContext) extends JActor with ActorInner { actorA =>
-  private[this] val mailbox = new MpscQueue[A]()
+  private[this] val mailbox: ConQueue[A] = new MpscQueue[A]()
   private[this] var scheduledTimeout: Cancellable = null
 
   @volatile private var terminated: Boolean = false
 
-  def !(a: A): Unit = { mailbox.add(a); trySchedule() }
+  def !(a: A): Unit = { mailbox.offer(a); trySchedule() }
   def apply(a: A): Unit = this ! a
 
   override def terminate(): Unit = { terminated = true; cancelTimeout() }
@@ -92,11 +94,17 @@ final class Actor[-A] private
     }
   }
 
+  private[this] val _mboxAct = new Consumer[A] {
+    def accept(a: A): Unit =
+      if (!terminated)
+        try {
+          val _b = behavior(a)
+          if (_b ne behavior) { cancelTimeout(); behavior = _b }
+        } catch { case ex: Throwable => onError(ex) }
+  }
+
   private def act(): Unit = {
-    mailbox.batchConsume(16) { a: A => if (!terminated)
-      try behavior = behavior(a)
-      catch { case ex: Throwable => onError(ex) }
-    }
+    mailbox.batchConsume(16, _mboxAct)
 
     if (mailbox.isLoaded) schedule()
     else {
@@ -113,6 +121,7 @@ object Actor {
       (context: ActorContext): Actor[A] = {
     val actor = new Actor(behavior, onError)(context)
     behavior.updateSelf(actor)
+    actor.scheduleTimeout()
     actor
   }
 

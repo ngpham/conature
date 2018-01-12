@@ -9,49 +9,61 @@ import java.io.IOException;
 
 public class OutboundProxy implements Runnable {
   private Server server;
-  private SocketChannel channelHint;
+  private boolean isScheduledForSelect;
 
   public OutboundProxy(Server server) { this.server = server; }
 
+  public void writeWithContext(SocketContext context) {
+    int r = context.write();
+    if ((r >= 0) && context.writer.hasSomethingToWrite()) {
+      SelectionKey key = context.channel.keyFor(server.outboundSelector);
+      key.interestOps(SelectionKey.OP_WRITE);
+
+      if (!isScheduledForSelect) {
+        isScheduledForSelect = true;
+        server.asyncThread.submit(this);
+      }
+    }
+  }
+
   @Override
   public void run() {
-    // check if the suggested channel still needs to write.
-    // memory visibilty is ensured for the corresponding SocketContext.send()
-    SelectionKey key = channelHint.keyFor(server.outboundSelector);
-    SocketContext ctx = (SocketContext) key.attachment();
-    if (ctx.writer.hasSomethingToWrite()) {
-      key.interestOps(key.interestOps() | SelectionKey.OP_WRITE);
-    }
-    writeSelect();
-  }
-
-  public OutboundProxy setWriteChannel(SocketChannel channel) {
-    channelHint = channel;
-    return this;
-  }
-
-  private void writeSelect() {
     int readyChannels = 0;
-    try {
-      readyChannels = server.outboundSelector.select();
-    } catch (IOException e) {
-      System.out.println("Outbound select() error. Skip writting task.");
-      e.printStackTrace();
-      return;
-    }
+    int r = 0;
+    boolean shouldLoop = false;
 
-    if (readyChannels > 0) {
+    while (shouldLoop) {
+      try {
+        readyChannels = server.outboundSelector.select();
+      } catch (IOException e) {
+        System.out.println("Outbound select() error. Skip writting task.");
+        e.printStackTrace();
+        isScheduledForSelect = false;
+        return;
+      }
+
       Set<SelectionKey> selectedKeys = server.outboundSelector.selectedKeys();
       Iterator<SelectionKey> it = selectedKeys.iterator();
       while (it.hasNext()) {
         SelectionKey key = it.next();
         if (key.isValid() && key.isWritable()) {
           SocketContext context = (SocketContext) key.attachment();
-          context.writeWithKey(key);
+          r = context.write();
+          if ((r >= 0) && context.writer.hasSomethingToWrite()) {
+            shouldLoop = true;
+          } else if (r >= 0) {
+            try {
+              key.interestOps(0);
+            } catch (Exception e) {
+              System.out.println("Ignore CancelledKeyException: " + e);
+            }
+          }
         }
         it.remove();
       }
-    }
+    } // while (shouldLoop)
+
+    isScheduledForSelect = false;
   }
 
 }

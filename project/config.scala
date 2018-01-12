@@ -71,6 +71,7 @@ object CompilerOptions {
   val javacOptions = Seq(
     "-target", "9",
     "-source", "9",
+    "-encoding", "utf-8",
     "-Xlint:all",
     "-Xlint:deprecation",
     "-Werror"

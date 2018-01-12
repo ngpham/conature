@@ -1,12 +1,13 @@
 
 package np.conature.nbnet;
 
+import np.conature.actor.ConQueue;
+import np.conature.actor.MpscQueue;
+
 import java.nio.ByteBuffer;
 import java.nio.channels.SocketChannel;
 import java.nio.channels.SelectionKey;
 import java.util.List;
-import java.util.Queue;
-import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicIntegerFieldUpdater;
 import java.io.IOException;
 
@@ -14,14 +15,14 @@ public class Writer {
   static final int SendingNotInitialized = 1;
   static final int SendingInProgress = 2;
 
-  private Queue<ByteBuffer> pendingMessages;
+  private ConQueue<ByteBuffer> pendingMessages;
   private ByteBuffer header;
   private int state;
   private ByteBuffer[] toWrite;
   protected SocketContext context;
 
   public Writer() {
-    pendingMessages = new ConcurrentLinkedQueue<ByteBuffer>(); // to be replaced by MPSC queue
+    pendingMessages = new MpscQueue<ByteBuffer>(); // to be replaced by MPSC queue
     header = ByteBuffer.allocate(2);
     toWrite = new ByteBuffer[2];
     toWrite[0] = header;
@@ -36,11 +37,13 @@ public class Writer {
 
   public boolean hasSomethingToWrite() { return !hasNothingToWrite(); }
 
-  public int write(SocketChannel channel, SelectionKey key) {
+  public int write(SocketChannel channel) {
     int r = 0;
+    int retries = 4;
     try {
-      while (true) {
-        if (hasNothingToWrite()) { key.interestOps(0); break; }
+      while (retries > 0) {
+        retries -= 1;
+        if (hasNothingToWrite()) break;
 
         if (state == SendingNotInitialized) {
           ByteBuffer sendBuffer = pendingMessages.poll();
@@ -55,8 +58,11 @@ public class Writer {
         }
         if (state == SendingInProgress) {
           r = (int) channel.write(toWrite); // safe
-          if (r <= 0) break;
-          if (toWrite[1].limit() == toWrite[1].position()) state = SendingNotInitialized;
+          if (r < 0) break;
+          if (toWrite[1].limit() == toWrite[1].position()) {
+            toWrite[1] = null;
+            state = SendingNotInitialized;
+          }
         }
       }  // end while
     } catch (IOException e) {
@@ -64,7 +70,6 @@ public class Writer {
       e.printStackTrace();
     } catch (Exception ae) {
       ae.printStackTrace();
-      r = -1;
     }
 
     return r;

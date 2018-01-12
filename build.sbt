@@ -10,20 +10,28 @@ lazy val commonSettings = Seq(
   publishTo := None
 )
 
-lazy val root = (project in file(".")).aggregate(actor, nbnet).
+lazy val root = (project in file(".")).aggregate(actor, nbnet, systest).
   settings(name := "conature")
-
 
 lazy val actor = (project in file("actor")).
   settings(
     commonSettings,
-    name := "conature",
+    name := "actor",
     libraryDependencies ++= Seq(
       Dependencies.scalatest % Test,
       Dependencies.scalacheck % Test)
   )
 
 lazy val nbnet = (project in file("nbnet")).
+  dependsOn(actor).
   settings(
     commonSettings,
-    name := "nbnet")
+    name := "nbnet"
+  )
+
+lazy val systest = (project in file("systest")).
+  dependsOn(actor, nbnet).
+  settings(
+    commonSettings,
+    name := "systest"
+  )

@@ -4,28 +4,30 @@ import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
 import java.util.function.Consumer;
 
 @SuppressWarnings({"unchecked", "rawtypes"})
-public abstract class JMpscQueue<T> {
+public class MpscQueue<T> implements ConQueue<T> {
   protected static final AtomicReferenceFieldUpdater __head =
-    AtomicReferenceFieldUpdater.newUpdater(JMpscQueue.class, JMpscQueue.Node.class, "head");
+    AtomicReferenceFieldUpdater.newUpdater(MpscQueue.class, MpscQueue.Node.class, "head");
 
   protected static final AtomicReferenceFieldUpdater __tail =
-    AtomicReferenceFieldUpdater.newUpdater(JMpscQueue.class, JMpscQueue.Node.class, "tail");
+    AtomicReferenceFieldUpdater.newUpdater(MpscQueue.class, MpscQueue.Node.class, "tail");
 
   private volatile Node<T> head;
   private volatile Node<T> tail;
 
-  protected JMpscQueue() {
+  public MpscQueue() {
     final Node<T> n = new Node<T>();
     __head.set(this, n);
     __tail.set(this, n);
   }
 
-  public void add(T value) {
+  @Override
+  public void offer(T value) {
     Node<T> n = new Node(value);
     Node.__next.lazySet(__head.getAndSet(this, n), n);
   }
 
-  public T take() {
+  @Override
+  public T poll() {
     Node<T> n = tail.next;  T ret = null;
     if (n != null) {
       ret = n.value;  n.value = null;
@@ -34,9 +36,12 @@ public abstract class JMpscQueue<T> {
     return ret;
   }
 
+  @Override
   public boolean isEmpty() { return tail.next == null; }
+  @Override
   public boolean isLoaded() { return !isEmpty(); }
 
+  @Override
   public void batchConsume(int i, Consumer<T> func) {
     Node<T> n = tail;
     while (n.next != null && i > 0) {
@@ -46,9 +51,19 @@ public abstract class JMpscQueue<T> {
     if (n != tail) __tail.lazySet(this, n);
   }
 
+  @Override
+  public void batchConsume(Consumer<T> func) {
+    Node<T> n = tail;
+    while (n.next != null) {
+      n = n.next;
+      func.accept(n.value);  n.value = null;
+    }
+    if (n != tail) __tail.lazySet(this, n);
+  }
+
   private static final class Node<T> {
     protected static final AtomicReferenceFieldUpdater __next =
-      AtomicReferenceFieldUpdater.newUpdater(JMpscQueue.Node.class, JMpscQueue.Node.class, "next");
+      AtomicReferenceFieldUpdater.newUpdater(MpscQueue.Node.class, MpscQueue.Node.class, "next");
 
     protected T value = null;
     private volatile Node<T> next = null;
