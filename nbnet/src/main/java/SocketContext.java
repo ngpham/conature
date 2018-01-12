@@ -28,11 +28,18 @@ public class SocketContext {
     this.writer = writer; writer.context = this;
   }
 
-  public void send(byte[] message) {
-    writer.enqueue(message);
+  public int send(byte[] message) {
+    if (!isValid) return -1; // best effort
+    try {
+      writer.enqueue(message);
+    } catch (NullPointerException e) {
+      System.out.println("Racing with SocketContext.destroy(): " + e);
+      return -1;
+    }
     server.asyncThread.submit(new Runnable() {
       public void run() { server.outboundProxy.writeWithContext(SocketContext.this); }
     });
+    return 0;
   }
 
   protected void handle(byte[] bytes) {
@@ -61,6 +68,10 @@ public class SocketContext {
   }
 
   protected int write() {
+    if (!isValid) {
+      System.out.println("SocketContext was destroyed. Ignore write().");
+      return -1;
+    }
     int r = writer.write(channel);
     if (r < 0) destroy();
     return r;
