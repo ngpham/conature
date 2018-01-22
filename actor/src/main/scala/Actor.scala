@@ -6,13 +6,18 @@ import java.util.function.Consumer
 import scala.util.control.NonFatal
 import scala.concurrent.duration.{ Duration, FiniteDuration }
 
-private[conature] trait ActorInner {
-  protected[conature] def terminate(): Unit
-  protected[conature] def cancelTimeout(): Unit
+trait Actor[-A] {
+  def !(message: A): Unit
+  def terminate(): Unit
+  def contramap[B](f: B => A): Actor[B]
+}
+
+private[actor] trait ActorInner {
+  def cancelTimeout(): Unit
 }
 
 trait Behavior[-T] extends Function1[T, Behavior[T]] {
-  protected[this] var selfref: Actor[T] = null
+  protected[this] var selfref: ActorImplementation[T] = null
 
   private var _timeoutAction: Callable[Unit] = null
   private var _timeoutDuration: Duration = Duration.Undefined
@@ -22,7 +27,9 @@ trait Behavior[-T] extends Function1[T, Behavior[T]] {
   def timeoutAction_=(c: Callable[Unit]): Unit = _timeoutAction = c
   def timeoutDuration_=(d: Duration): Unit = _timeoutDuration = d
 
-  private[conature] def updateSelf(a: ActorInner): Unit = { selfref = a.asInstanceOf[Actor[T]] }
+  private[actor] def updateSelf(a: ActorInner): Unit = {
+    selfref = a.asInstanceOf[ActorImplementation[T]]
+  }
 
   def terminate(): Unit = selfref.terminate()
 
@@ -44,9 +51,11 @@ trait Behavior[-T] extends Function1[T, Behavior[T]] {
   }
 }
 
-final class Actor[-A] private
-    (private[this] var behavior: Behavior[A], onError: Throwable => Unit)
-    (context: ActorContext) extends JActor with ActorInner { actorA =>
+private[actor] final class ActorImplementation[-A] private
+    (private[this] var behavior: Behavior[A], val onError: Throwable => Unit)
+    (val context: ActorContext)
+extends JActor with ActorInner with Actor[A] { actorA =>
+
   private[this] val mailbox: ConQueue[A] = new MpscQueue[A]()
   private[this] var scheduledTimeout: Cancellable = null
 
@@ -64,7 +73,8 @@ final class Actor[-A] private
       def apply(b: B) = { actorA ! f(b); this }
     }, onError)(context)
 
-  override protected[conature] def cancelTimeout(): Unit = if (scheduledTimeout ne null) {
+
+  override def cancelTimeout(): Unit = if (scheduledTimeout ne null) {
     scheduledTimeout.cancel()
     scheduledTimeout = null
   }
@@ -115,15 +125,22 @@ final class Actor[-A] private
   }
 }
 
-object Actor {
+private[actor] object ActorImplementation {
   def apply[A]
-      (behavior: Behavior[A], onError: Throwable => Unit = Actor.rethrow)
+      (behavior: Behavior[A], onError: Throwable => Unit)
       (context: ActorContext): Actor[A] = {
-    val actor = new Actor(behavior, onError)(context)
+    val actor = new ActorImplementation(behavior, onError)(context)
     behavior.updateSelf(actor)
     actor.scheduleTimeout()
     actor
   }
+}
+
+object Actor {
+  def apply[A]
+      (behavior: Behavior[A], onError: Throwable => Unit = rethrow)
+      (context: ActorContext): Actor[A] =
+    ActorImplementation(behavior, onError)(context)
 
   val rethrow: Throwable => Unit = e => e match {
     case _: InterruptedException => throw e

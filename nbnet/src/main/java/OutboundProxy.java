@@ -3,9 +3,11 @@ package np.conature.nbnet;
 
 import java.nio.channels.SelectionKey;
 import java.nio.channels.SocketChannel;
+import java.net.InetSocketAddress;
 import java.util.Iterator;
 import java.util.Set;
 import java.io.IOException;
+import java.nio.channels.ClosedChannelException;
 
 public class OutboundProxy implements Runnable {
   private Server server;
@@ -16,12 +18,20 @@ public class OutboundProxy implements Runnable {
   public void writeWithContext(SocketContext context) {
     int r = context.write();
     if ((r >= 0) && context.writer.hasSomethingToWrite()) {
-      SelectionKey key = context.channel.keyFor(server.outboundSelector);
-      key.interestOps(SelectionKey.OP_WRITE);
+      try {
+        SelectionKey key = context.channel.keyFor(server.outboundSelector);
+        if (key == null)
+          key = context.channel.register(server.outboundSelector, SelectionKey.OP_WRITE);
+        else
+          key.interestOps(SelectionKey.OP_WRITE);
 
-      if (!isScheduledForSelect) {
-        isScheduledForSelect = true;
-        server.asyncThread.submit(this);
+        if (!isScheduledForSelect) {
+          isScheduledForSelect = true;
+          server.asyncOutbound.submit(this);
+        }
+      } catch (ClosedChannelException e) {
+        System.out.println("Channel close during write select register." + e);
+        context.destroy();
       }
     }
   }
@@ -30,15 +40,18 @@ public class OutboundProxy implements Runnable {
   public void run() {
     int readyChannels = 0;
     int r = 0;
-    boolean shouldLoop = false;
+    boolean hasPendingWrite = true;
+    int retries = 4;
 
-    while (shouldLoop) {
+    while (retries > 0 && hasPendingWrite) {
+      retries -= 1;
+      hasPendingWrite = false;
+
       try {
         readyChannels = server.outboundSelector.select();
       } catch (IOException e) {
-        System.out.println("Outbound select() error. Skip writting task.");
-        e.printStackTrace();
-        isScheduledForSelect = false;
+        System.out.println("Outbound select() error. Skip writting task." + e);
+        // sleep for a while
         return;
       }
 
@@ -46,11 +59,12 @@ public class OutboundProxy implements Runnable {
       Iterator<SelectionKey> it = selectedKeys.iterator();
       while (it.hasNext()) {
         SelectionKey key = it.next();
+
         if (key.isValid() && key.isWritable()) {
           SocketContext context = (SocketContext) key.attachment();
           r = context.write();
           if ((r >= 0) && context.writer.hasSomethingToWrite()) {
-            shouldLoop = true;
+            hasPendingWrite = true;
           } else if (r >= 0) {
             try {
               key.interestOps(0);
@@ -59,11 +73,12 @@ public class OutboundProxy implements Runnable {
             }
           }
         }
+
         it.remove();
       }
-    } // while (shouldLoop)
+    } // while
 
-    isScheduledForSelect = false;
+    isScheduledForSelect = hasPendingWrite;
   }
 
 }

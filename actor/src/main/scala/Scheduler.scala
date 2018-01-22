@@ -14,11 +14,13 @@ trait Scheduler {
 }
 
 class HashedWheelScheduler
-    (wheelSizeInBits: Int = 8, val tickDuration: FiniteDuration = 100.millisecond)
+    (wheelSizeInBits: Int = 8, tickDuration: FiniteDuration = 100.millisecond)
     extends Scheduler {
   import HashedWheelScheduler.{ Task, Bucket }
 
-  require(tickDuration.toMillis >= 10, "tick duration should be at least 10 milliseconds.")
+  val tickDurationMillis: Long = tickDuration.toMillis
+
+  require(tickDurationMillis >= 10, "tick duration should be at least 10 milliseconds.")
   require((wheelSizeInBits > 0) && (wheelSizeInBits < 10), "wheel size: 2 to 2^10.")
 
   @volatile private var status = 1
@@ -52,7 +54,7 @@ class HashedWheelScheduler
       try wheel(bucketIndex).expireTasks() catch { case _: Exception => }
 
       currentTick = currentTick + 1
-      val wakeupAt = tickDuration.toMillis * (currentTick)
+      val wakeupAt = tickDurationMillis * (currentTick)
       val timeToSleep = wakeupAt - (System.nanoTime / 1000000 - startTime)
 
       if (timeToSleep > 0) try Thread.sleep(timeToSleep)
@@ -63,7 +65,7 @@ class HashedWheelScheduler
   timer.start()
 
   override def schedule(delay: FiniteDuration)(f: => Unit): Cancellable = {
-    val task = new Task(() => f, delay.toMillis / tickDuration.toMillis)
+    val task = new Task(() => f, delay.toMillis / tickDurationMillis)
     tasks.offer(task)
     task
   }

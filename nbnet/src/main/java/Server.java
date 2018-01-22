@@ -11,41 +11,62 @@ import java.net.InetSocketAddress;
 import java.util.function.Consumer;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-
 import java.io.IOException;
 import java.nio.channels.ClosedChannelException;
 
 public class Server {
+  private static Consumer<? extends Object> emptyHandler = (x) -> { };
+
   private ServerSocketChannel acceptor;
 
-  private Thread inboundThread;
-  protected ExecutorService asyncThread;
+  protected ExecutorService asyncInbound;
+  protected ExecutorService asyncOutbound;
+
   protected OutboundProxy outboundProxy;
+  private Runnable inboundSelectLoop;
+  private SelectorRegistration registrationTask;
 
   protected Selector inboundSelector;
   protected Selector outboundSelector;
 
   private int port;
-  protected Consumer<ContextualRawMessage> handler;
   private volatile boolean isActive;
 
-  public Server(int port) {
-    this(port, new Consumer<ContextualRawMessage>() {
-      public void accept(ContextualRawMessage msg) {
-        System.out.print("0x");
-        for (byte b : msg.rawBytes) System.out.format("%02x", b);
-        System.out.println("");
-      }
-    });
+  @SuppressWarnings("unchecked")
+  protected Consumer<ContextualRawMessage> inboundMessageHandler =
+    (Consumer<ContextualRawMessage>) emptyHandler;
+
+  @SuppressWarnings("unchecked")
+  protected Consumer<SocketContext> onConnectionEstablishedHandler =
+    (Consumer<SocketContext>) emptyHandler;
+
+  @SuppressWarnings("unchecked")
+  protected Consumer<InetSocketAddress> onConnectionAttemptFailureHandler =
+    (Consumer<InetSocketAddress>) emptyHandler;
+
+  @SuppressWarnings("unchecked")
+  protected Consumer<InetSocketAddress> onConnectionCloseHandler =
+    (Consumer<InetSocketAddress>) emptyHandler;
+
+  public Server(int port) { this.port = port; }
+
+  public Server setInboundMessageHandler(Consumer<ContextualRawMessage> handler) {
+    this.inboundMessageHandler = handler;
+    return this;
   }
 
-  public Server(int port, Consumer<ContextualRawMessage> handler) {
-    this.port = port;
-    this.handler = handler;
+  public Server setOnConnectionEstablishedHandler(Consumer<SocketContext> handler) {
+    this.onConnectionEstablishedHandler = handler;
+    return this;
   }
 
-  public Server setHandler(Consumer<ContextualRawMessage> handler) {
-    this.handler = handler;
+  public Server setOnConnectionAttemptFailureHandler(Consumer<InetSocketAddress> handler) {
+    this.onConnectionAttemptFailureHandler = handler;
+    return this;
+  }
+
+  public Server setOnConnectionCloseHandler(Consumer<InetSocketAddress> handler) {
+    this.onConnectionCloseHandler = handler;
     return this;
   }
 
@@ -60,34 +81,28 @@ public class Server {
 
     acceptor.register(inboundSelector, SelectionKey.OP_ACCEPT);
 
-    inboundThread = new Thread(new Runnable() { public void run() {
-      while (isActive) {
+    registrationTask = new SelectorRegistration();
+
+    inboundSelectLoop = new Runnable() {
+      public void run() {
         int readyChannels = 0;
         try {
           readyChannels = inboundSelector.select();
         } catch (IOException ioe) {
-          System.out.println("Inbound select() error. Sleep and retry");
-          ioe.printStackTrace();
+          System.out.println("Inbound select() error. Sleep and retry" + ioe);
           try {
             Thread.sleep(1000);
           } catch (InterruptedException ie) {
             Thread.currentThread().interrupt();
-            continue;
           }
         }
 
-        if (!isActive) { System.out.println("Inbound Thread stopping."); return; }
+        if (!isActive) { System.out.println("inboundSelectLoop stopping."); return; }
 
         if (readyChannels == 0) {
-          System.out.println(
-            "select() seems to run into the infamous jdk epoll bug on Linux.\n" +
-            "Sleep and retry.");
           try {
-            Thread.sleep(1000);
-          } catch (InterruptedException ie) {
-            Thread.currentThread().interrupt();
-            continue;
-          }
+            if (registrationTask.tasks.isEmpty()) Thread.sleep(1000);
+          } catch (InterruptedException ie) { }
         }
 
         if (readyChannels > 0) {
@@ -100,18 +115,53 @@ public class Server {
             } else if (key.isValid() && key.isReadable()) {
               SocketContext context = (SocketContext) key.attachment();
               context.read();
+            } else if (key.isValid() && key.isConnectable()) {
+              InetSocketAddress orgAttempt = (InetSocketAddress) key.attachment();
+              SocketChannel channel = (SocketChannel) key.channel();
+              finishAndSetupSocketContext(orgAttempt, channel);
             }
             it.remove();
           }
         }
-      } // while (isActive)
-    }});
 
-    inboundThread.setDaemon(true);
-    inboundThread.start();
+        asyncInbound.submit(inboundSelectLoop);
+        return;
+      }
+    };
 
-    asyncThread = Executors.newSingleThreadExecutor();
+    asyncInbound = Executors.newSingleThreadExecutor();
+    asyncInbound.submit(inboundSelectLoop);
+
+    asyncOutbound = Executors.newSingleThreadExecutor();
     outboundProxy = new OutboundProxy(this);
+  }
+
+  private void setupSocketContext(SocketChannel channel, InetSocketAddress id)
+  throws IOException {
+    try {
+      SocketContext context = new SocketContext(
+        this,
+        channel,
+        new Reader(), new Writer(),
+        (InetSocketAddress) channel.getRemoteAddress());
+
+      if (id != null) context.remoteIdentity(id);
+      channel.register(inboundSelector, SelectionKey.OP_READ, context);
+
+      onConnectionEstablishedHandler.accept(context);
+    } catch (Exception e) {
+      e.printStackTrace();
+    }
+  }
+
+  private void finishAndSetupSocketContext(InetSocketAddress orgAttempt, SocketChannel channel) {
+    try {
+      boolean connected = channel.finishConnect();
+      if (connected) setupSocketContext(channel, orgAttempt);
+    } catch (IOException e) {
+      System.out.println("Cannot complete an outbound connection attempt. " + e);
+      onConnectionAttemptFailureHandler.accept(orgAttempt);
+    }
   }
 
   private void accept(SelectionKey key) {
@@ -120,31 +170,57 @@ public class Server {
       SocketChannel socket = ssc.accept();
       if (socket == null) throw new IOException();
       socket.configureBlocking(false);
-
-      SocketContext context = new SocketContext(
-        this, socket,
-        new Reader(), new Writer(),
-        handler);
-
-      socket.register(inboundSelector, SelectionKey.OP_READ).attach(context);
-      socket.register(outboundSelector, 0).attach(context);
+      setupSocketContext(socket, null);
     } catch (IOException e) {
-      System.out.println("Cannot accept a connection attempt.");
-      e.printStackTrace();
-    } catch (Exception ae) {
-      ae.printStackTrace();
+      System.out.println("Cannot accept a connection attempt. " + e);
+    }
+  }
+
+  public void connect(InetSocketAddress address) {
+    try {
+      SocketChannel socket = SocketChannel.open();
+      socket.configureBlocking(false);
+      socket.connect(address);
+
+      registrationTask.offer(
+        (Void x) -> {
+          try {
+            socket.register(inboundSelector, SelectionKey.OP_CONNECT, address);
+          } catch (ClosedChannelException e) {
+            System.out.println("Ignore failed connection." + e);
+          }
+        }
+      );
+
+      asyncInbound.submit(registrationTask);
+      inboundSelector.wakeup();
+    } catch (IOException e) {
+      System.out.println("Cannot complete an outbound connection attempt. " + e);
+    } catch (Exception e) {
+      System.out.println("Exception Server.connect(). " + e);
     }
   }
 
   public void shutdown() {
     try {
-      System.out.println("Server is shutting down.");
+      isActive = false;
+      asyncOutbound.shutdown();
+      asyncInbound.shutdownNow();
+      inboundSelector.wakeup();
+      outboundSelector.wakeup();
       acceptor.close();
-    } catch (IOException e) {
+
+      System.out.println("Server is shutting down.");
+
+      for (SelectionKey key: inboundSelector.keys()) {
+        if (key.isValid() && (key.attachment() instanceof SocketContext)) {
+          SocketContext ctx = (SocketContext) key.attachment();
+          if (ctx != null) ctx.flushThenDestroy();
+        }
+      }
+    } catch (Exception e) {
       System.out.println("Ignore error during server shutdown: " + e);
     }
-    isActive = false;
-    asyncThread.shutdownNow();
+    System.out.println("Server was shutdown.");
   }
-
 }

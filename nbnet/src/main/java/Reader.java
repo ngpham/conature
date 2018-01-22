@@ -48,10 +48,10 @@ public class Reader {
         }
       }
     } catch (IOException e) {
-      System.out.println("Exception read() at SocketChannel.");
-      e.printStackTrace();
-      state = ReadingHeader;
+      System.out.println("Exception read() at SocketChannel. " + e);
+      r = -1;
     }
+
     return r;
   }
 

@@ -22,22 +22,22 @@ public class Writer {
   protected SocketContext context;
 
   public Writer() {
-    pendingMessages = new MpscQueue<ByteBuffer>(); // to be replaced by MPSC queue
+    pendingMessages = new MpscQueue<ByteBuffer>();
     header = ByteBuffer.allocate(2);
     toWrite = new ByteBuffer[2];
     toWrite[0] = header;
     state = SendingNotInitialized;
   }
 
-  public void enqueue(byte[] bytes) { pendingMessages.offer(ByteBuffer.wrap(bytes)); }
+  protected void enqueue(byte[] bytes) { pendingMessages.offer(ByteBuffer.wrap(bytes)); }
 
-  public boolean hasNothingToWrite() {
+  protected boolean hasNothingToWrite() {
     return (pendingMessages.isEmpty() && (state == SendingNotInitialized));
   }
 
-  public boolean hasSomethingToWrite() { return !hasNothingToWrite(); }
+  protected boolean hasSomethingToWrite() { return !hasNothingToWrite(); }
 
-  public int write(SocketChannel channel) {
+  protected int write(SocketChannel channel) {
     int r = 0;
     int retries = 4;
     try {
@@ -57,7 +57,7 @@ public class Writer {
           }
         }
         if (state == SendingInProgress) {
-          r = (int) channel.write(toWrite); // safe
+          r = (int) channel.write(toWrite);
           if (r < 0) break;
           if (toWrite[1].limit() == toWrite[1].position()) {
             toWrite[1] = null;
@@ -66,10 +66,8 @@ public class Writer {
         }
       }  // end while
     } catch (IOException e) {
-      System.out.println("IOException in write() socket channel.");
-      e.printStackTrace();
-    } catch (Exception ae) {
-      ae.printStackTrace();
+      System.out.println("IOException in write() socket channel." + e);
+      r = -1;
     }
 
     return r;

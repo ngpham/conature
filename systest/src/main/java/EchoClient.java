@@ -6,6 +6,7 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.util.Arrays;
 import java.util.Random;
+import java.net.InetSocketAddress;
 
 import java.io.IOException;
 import java.net.SocketException;
@@ -41,7 +42,9 @@ public class EchoClient {
         int numMsg = (rand.nextInt(maxMsg / 4) + 1) * 4;
 
         try {
-          Socket server = new Socket(args[0], port);
+          Socket server = new Socket();
+          server.connect(new InetSocketAddress(args[0], port), 100);
+
           InputStream in = server.getInputStream();
           OutputStream out = server.getOutputStream();
 
@@ -74,7 +77,7 @@ public class EchoClient {
             Thread.sleep(rand.nextInt(5) + 5);
           }
           server.close();
-        } catch (Exception e) { System.out.println(e.toString()); }
+        } catch (Exception e) { System.out.println(e.getMessage()); }
 
         System.out.println("Total messages echoed, expected: " + numMsg + ", actual: " + count);
       }

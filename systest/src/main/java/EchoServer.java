@@ -9,14 +9,21 @@ import java.util.concurrent.CountDownLatch;
 import java.util.Scanner;
 
 public class EchoServer {
+  private Server netSrv;
+
   public static void main(String[] args) {
     int port = 9999;
     if (args.length == 1) port = Integer.parseInt(args[0]);
-    Server server = new Server(port);
+    EchoServer instance = new EchoServer();
+    instance.netSrv = new Server(port);
 
     Consumer<ContextualRawMessage> messageHandler = new Consumer<ContextualRawMessage>() {
+      private int limit = 0;
+
       public void accept(ContextualRawMessage msg) {
         msg.context.send(msg.rawBytes);
+        limit += 1;
+        if (limit > 512) instance.netSrv.shutdown();
       }
     };
 
@@ -25,7 +32,7 @@ public class EchoServer {
         Scanner cli = new Scanner(System.in);
         System.out.println("Watcher started. ENTER some INPUT to stop the server.");
         cli.next();
-        server.shutdown();
+        instance.netSrv.shutdown();
       }
     });
 
@@ -33,11 +40,15 @@ public class EchoServer {
     watcher.start();
 
     try {
-      server.setHandler(messageHandler).start();
+      instance.netSrv.setInboundMessageHandler(messageHandler)
+        .setOnConnectionEstablishedHandler((x) -> System.out.println("connection in!!"))
+        .setOnConnectionCloseHandler(
+          (x) -> System.out.println("disconnected client: " + x.getHostString()))
+        .start();
       watcher.join();
     } catch (Exception e) {
-      System.out.println("Ignore exception...");
-      e.printStackTrace();
+      System.out.println("Ignore exception..." + e);
     }
   }
+
 }
