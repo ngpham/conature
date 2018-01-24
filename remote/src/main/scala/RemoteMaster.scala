@@ -36,7 +36,10 @@ extends Behavior[CommandEventProtocol] {
       this
     case ConnectionClosure(addressOrId) =>
       val proxy = isaToProxy.getOrElse(addressOrId, null)
-      if (proxy ne null) proxy ! cep
+      if (proxy ne null) {
+        isaToProxy -= addressOrId
+        proxy ! cep
+      }
       this
     case InboundMessage(sctx, _) =>
       val proxy = isaToProxy.getOrElse(sctx.remoteAddress, null)

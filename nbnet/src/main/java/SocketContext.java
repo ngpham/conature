@@ -6,7 +6,6 @@ import java.nio.channels.SelectionKey;
 import java.net.InetSocketAddress;
 import java.util.function.Consumer;
 import java.util.List;
-
 import java.io.IOException;
 
 public class SocketContext {
@@ -18,42 +17,39 @@ public class SocketContext {
   protected Writer writer;
   protected Consumer<ContextualRawMessage> readHandler;
   protected SocketChannel channel;
-  protected Server server;
+  protected NbTransport nbTrans;
   private InetSocketAddress remoteAddress;
   private InetSocketAddress remoteIdentity = null;
+  private RegisterWriteOp registerWriteOp = null;
 
   private volatile int state;
 
   public SocketContext(
-      Server server,
+      NbTransport nbTrans,
       SocketChannel channel,
       Reader reader, Writer writer,
       InetSocketAddress remoteAddress) {
-    this.server = server;
+    this.nbTrans = nbTrans;
     this.channel = channel;
     this.reader = reader; reader.context = this;
     this.writer = writer; writer.context = this;
     this.remoteAddress = remoteAddress;
 
     state = IsOpened;
+    registerWriteOp = new RegisterWriteOp(this);
   }
 
   public int send(byte[] message) {
     if (state != IsOpened) return -1;
-    try {
-      writer.enqueue(message);
-    } catch (NullPointerException e) {
-      System.out.println("Racing with SocketContext.destroy(). " + e);
-      return -1;
-    }
-    server.asyncOutbound.submit(new Runnable() {
-      public void run() { server.outboundProxy.writeWithContext(SocketContext.this); }
-    });
+
+    writer.enqueue(message);
+    nbTrans.scheduleRegistration(registerWriteOp);
+
     return 0;
   }
 
   protected void handle(byte[] bytes) {
-    server.inboundMessageHandler.accept(new ContextualRawMessage(bytes, this));
+    nbTrans.inboundMessageHandler.accept(new ContextualRawMessage(bytes, this));
   }
 
   protected void destroy() {
@@ -66,12 +62,12 @@ public class SocketContext {
     try {
       channel.close();
     } catch (Exception e) {
-      System.out.println("Ignore error at SocketChannel close() " + e);
+      System.out.println("Ignore error at SocketChannel close(). " + e);
     } finally {
       channel = null;
     }
 
-    server.onConnectionCloseHandler.accept(remoteAddress);
+    nbTrans.onConnectionCloseHandler.accept(remoteAddress);
   }
 
   public void flushThenDestroy() {
@@ -103,4 +99,28 @@ public class SocketContext {
   public InetSocketAddress remoteAddress() { return remoteAddress; }
   public InetSocketAddress remoteIdentity() { return remoteIdentity; }
   public void remoteIdentity(InetSocketAddress isa) { remoteIdentity = isa; }
+
+  private class RegisterWriteOp implements Runnable {
+    private SocketContext context;
+    protected RegisterWriteOp(SocketContext sc) { context = sc; }
+
+    public void run() {
+      try {
+        if (context.writer.hasNothingToWrite()) return;
+
+        SelectionKey key = context.channel.keyFor(nbTrans.selector);
+        if (key == null)
+          key = context.channel.register(nbTrans.selector, SelectionKey.OP_WRITE);
+        else {
+          int intOps = key.interestOps();
+          if ((intOps & SelectionKey.OP_WRITE) == 0)
+            key.interestOps(intOps | SelectionKey.OP_WRITE);
+        }
+      } catch (Exception e) {
+        System.out.println("Some error, SocketContext must have been destroyed, "
+          + "or will be destroyed by select read(). " + e);
+      }
+    }
+  }
+
 }

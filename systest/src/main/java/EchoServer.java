@@ -1,7 +1,7 @@
 
 package np.conature.systest;
 
-import np.conature.nbnet.Server;
+import np.conature.nbnet.NbTransport;
 import np.conature.nbnet.ContextualRawMessage;
 
 import java.util.function.Consumer;
@@ -9,13 +9,13 @@ import java.util.concurrent.CountDownLatch;
 import java.util.Scanner;
 
 public class EchoServer {
-  private Server netSrv;
+  private NbTransport netSrv;
 
   public static void main(String[] args) {
     int port = 9999;
     if (args.length == 1) port = Integer.parseInt(args[0]);
     EchoServer instance = new EchoServer();
-    instance.netSrv = new Server(port);
+    instance.netSrv = new NbTransport(port);
 
     Consumer<ContextualRawMessage> messageHandler = new Consumer<ContextualRawMessage>() {
       private int limit = 0;
@@ -41,9 +41,9 @@ public class EchoServer {
 
     try {
       instance.netSrv.setInboundMessageHandler(messageHandler)
-        .setOnConnectionEstablishedHandler((x) -> System.out.println("connection in!!"))
+        .setOnConnectionEstablishedHandler((x) -> System.out.println("New client connected."))
         .setOnConnectionCloseHandler(
-          (x) -> System.out.println("disconnected client: " + x.getHostString()))
+          (x) -> System.out.println("Disconnected client: " + x))
         .start();
       watcher.join();
     } catch (Exception e) {

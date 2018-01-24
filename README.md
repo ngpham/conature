@@ -37,7 +37,7 @@ timeout and scheduled tasks.
 The networking service (still in its primitive form) is based on Java non-blocking TCP.
 This TCP layer is thin, as we can reuse the actor system
 to have concurrent handling of networking events. The networking is hardcoded with message of
-64Kb maximum. Large message transfer must be handled by client code.
+64KB maximum. Large message transfer must be handled by client code.
 
 Serialization is simply Java based. I am considering an alternative dynamic serialization approach,
 i.e. no code generation.

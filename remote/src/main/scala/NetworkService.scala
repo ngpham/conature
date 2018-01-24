@@ -2,7 +2,7 @@
 package np.conature.remote
 
 import np.conature.actor.{ ActorContext, Actor }
-import np.conature.nbnet.{ Server }
+import np.conature.nbnet.{ NbTransport }
 import messages.{ DataMessage, SendMessage, InboundMessage, ConnectionAcceptance,
   ConnectionClosure, RemoveAllProxies, CommandEventProtocol }
 
@@ -13,7 +13,7 @@ import scala.collection.concurrent.{ Map => CMap, TrieMap }
 
 trait NetworkService { netSrv =>
   private[remote] def actorCtx: ActorContext
-  private[remote] def nbTcp: Server
+  private[remote] def nbTcp: NbTransport
   private[remote] def serializer: Serializer
 
   def register(name: String, actor: Actor[_]): Boolean
@@ -54,7 +54,7 @@ extends NetworkService {
   }
 
   val localUri: String = (new URI(s"cnt://${localIsa.getHostName}:${localIsa.getPort}")).toString
-  private[remote] var nbTcp: Server = null
+  private[remote] var nbTcp: NbTransport = null
 
   private var localActors: CMap[String, Actor[Any]] = null
 
@@ -72,7 +72,7 @@ extends NetworkService {
     localActors = TrieMap.empty[String, Actor[Any]]
     remoteMaster = actorCtx.create(new RemoteMaster(this))
 
-    nbTcp = new Server(localIsa.getPort)
+    nbTcp = new NbTransport(localIsa.getPort)
     (nbTcp
       .setInboundMessageHandler(crm =>
           remoteMaster ! InboundMessage(crm.context, crm.rawBytes))

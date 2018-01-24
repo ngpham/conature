@@ -5,7 +5,7 @@ import java.nio.ByteBuffer;
 import java.nio.channels.SocketChannel;
 import java.io.IOException;
 
-public class Reader {
+class Reader {
   static final int ReadingHeader = 1;
   static final int ReadingPayload = 2;
 

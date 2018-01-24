@@ -11,7 +11,7 @@ import java.util.List;
 import java.util.concurrent.atomic.AtomicIntegerFieldUpdater;
 import java.io.IOException;
 
-public class Writer {
+class Writer {
   static final int SendingNotInitialized = 1;
   static final int SendingInProgress = 2;
 

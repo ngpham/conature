@@ -87,7 +87,7 @@ public class EchoClient {
 
     for (int i = 0; i < numThread; i++) {
       threads[i] = new Thread(task);
-      threads[i].run();
+      threads[i].start();
     }
 
     for (int i = 0; i < numThread; i++) {
