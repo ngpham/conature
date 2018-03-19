@@ -1,10 +1,10 @@
 
 package np.conature.nbnet;
 
-import np.conature.actor.ConQueue;
-import np.conature.actor.MpscQueue;
-
 import java.util.function.Consumer;
+
+import np.conature.util.ConQueue;
+import np.conature.util.MpscQueue;
 
 public class CombinedTask implements Runnable {
   private ConQueue<Runnable> tasks = new MpscQueue<>();

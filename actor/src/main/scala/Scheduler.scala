@@ -2,6 +2,7 @@ package np.conature.actor
 
 import java.util.function.Consumer
 import scala.concurrent.duration.{ FiniteDuration, DurationInt }
+import np.conature.util.{ ConQueue, MpscQueue }
 
 trait Cancellable {
   def cancel(): Unit
@@ -51,7 +52,7 @@ class HashedWheelScheduler
       fetchIntoWheel()
       val bucketIndex = currentTick & wheelMask
 
-      try wheel(bucketIndex).expireTasks() catch { case _: Exception => }
+      wheel(bucketIndex).expireTasks()
 
       currentTick = currentTick + 1
       val wakeupAt = tickDurationMillis * (currentTick)
@@ -97,8 +98,14 @@ object HashedWheelScheduler {
         if (t ne null) {
           val _next = t.next
           if (t.isCancelled) remove(t)
-          else if (t.countdown <= 0) { t.exec(); remove(t) }
-          else t.countdown -= 1
+          else if (t.countdown <= 0) {
+            try t.exec()
+            catch {
+              case e: Throwable => println(e)
+            } finally {
+              remove(t)
+            }
+          } else t.countdown -= 1
           rec(_next)
         }
       }

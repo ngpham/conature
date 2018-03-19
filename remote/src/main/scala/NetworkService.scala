@@ -1,7 +1,7 @@
 
 package np.conature.remote
 
-import np.conature.actor.{ ActorContext, Actor }
+import np.conature.actor.{ ActorContext, Actor, Extension }
 import np.conature.nbnet.{ NbTransport }
 import messages.{ DataMessage, SendMessage, InboundMessage, ConnectionAcceptance,
   ConnectionClosure, RemoveAllProxies, CommandEventProtocol }
@@ -11,7 +11,7 @@ import java.net.{ InetSocketAddress, URI }
 import scala.util.{ Try, Success, Failure }
 import scala.collection.concurrent.{ Map => CMap, TrieMap }
 
-trait NetworkService { netSrv =>
+trait NetworkService extends Extension { netSrv =>
   private[remote] def actorCtx: ActorContext
   private[remote] def nbTcp: NbTransport
   private[remote] def serializer: Serializer
@@ -24,11 +24,28 @@ trait NetworkService { netSrv =>
 
   // def connect(nodeAdr: String): Unit
   // def disConnect(nodeAdr: String): Unit
-  def start(): Try[Unit]
-  def stop(): Unit
 
   def locate[A <: Serializable](actorAdr: String): Option[RemoteActor[A]] =
     RemoteActor(actorAdr, netSrv) match {
+      case Success(ra) => Some(ra)
+      case Failure(e) =>
+        println(s"Error looking up remote actor. $e")
+        None
+    }
+
+  def locate[A <: Serializable](uri: URI): Option[RemoteActor[A]] =
+    RemoteActor(uri, netSrv) match {
+      case Success(ra) => Some(ra)
+      case Failure(e) =>
+        println(s"Error looking up remote actor. $e")
+        None
+    }
+
+  def locate[A <: Serializable](
+      name: String,
+      host: String,
+      port: Int): Option[RemoteActor[A]] =
+    RemoteActor(name, host, port, netSrv) match {
       case Success(ra) => Some(ra)
       case Failure(e) =>
         println(s"Error looking up remote actor. $e")
@@ -68,9 +85,9 @@ extends NetworkService {
 
   def lookupLocal(name: String): Option[Actor[Any]] = localActors.get(name)
 
-  def start(): Try[Unit] = Try {
+  override def start(): Unit = {
     localActors = TrieMap.empty[String, Actor[Any]]
-    remoteMaster = actorCtx.create(new RemoteMaster(this))
+    remoteMaster = actorCtx.spawn(new RemoteMaster(this))
 
     nbTcp = new NbTransport(localIsa.getPort)
     (nbTcp
@@ -83,9 +100,6 @@ extends NetworkService {
       .setOnConnectionCloseHandler(isa =>
           remoteMaster ! ConnectionClosure(isa))
       .start())
-  } match {
-    case Success(_) => Success(())
-    case x @ Failure(_) => stop(); x
   }
 
   // def connect(nodeAdr: String): Unit = ()
@@ -95,8 +109,7 @@ extends NetworkService {
       node: InetSocketAddress, actorName: String, msg: A): Unit =
     remoteMaster ! SendMessage(DataMessage(actorName, msg), node)
 
-
-  def stop(): Unit = {
+  override def stop(): Unit = {
     nbTcp.shutdown()
     remoteMaster ! RemoveAllProxies
     localActors.clear()
@@ -105,11 +118,14 @@ extends NetworkService {
 }
 
 object NetworkService {
+  private[remote] var instance: NetworkService = null
+
   def apply(actorCtx: ActorContext, localAdr: String): NetworkService = {
     // cnt://host:port
-    new NetworkServiceImpl(
+    instance = new NetworkServiceImpl(
       actorCtx,
       new Serializer(),
       localAdr)
+    instance
   }
 }

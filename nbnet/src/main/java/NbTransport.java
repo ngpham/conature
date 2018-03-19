@@ -1,9 +1,6 @@
 
 package np.conature.nbnet;
 
-import np.conature.actor.ConQueue;
-import np.conature.actor.MpscQueue;
-
 import java.util.Collection;
 import java.util.Iterator;
 import java.nio.channels.Selector;
@@ -16,6 +13,9 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.io.IOException;
 import java.nio.channels.CancelledKeyException;
+
+import np.conature.util.ConQueue;
+import np.conature.util.MpscQueue;
 
 public class NbTransport {
   private static Consumer<? extends Object> emptyHandler = (x) -> { };

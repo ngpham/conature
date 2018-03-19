@@ -1,6 +1,6 @@
 lazy val commonSettings = Seq(
   organization := "np",
-  scalaVersion := "2.12.4",
+  scalaVersion := Config.scalaVer,
   version := "0.1-SNAPSHOT",
   test in assembly := {},
   autoCompilerPlugins := true,
@@ -11,20 +11,32 @@ lazy val commonSettings = Seq(
   publishTo := None
 )
 
-lazy val root = (project in file(".")).aggregate(actor, nbnet, remote, systest).
+lazy val root = (project in file(".")).aggregate(util, actor, nbnet, remote, systest).
   dependsOn(actor, nbnet, remote, systest). // for 'sbt console' to find packages
   settings(name := "conature")
 
-lazy val actor = (project in file("actor")).
+lazy val util = (project in file("util")).
   settings(
     commonSettings,
-    name := "actor",
+    name := "util",
     libraryDependencies ++= Seq(
       Dependencies.scalatest % Test,
       Dependencies.scalacheck % Test)
   )
 
+lazy val actor = (project in file("actor")).
+  dependsOn(util).
+  settings(
+    commonSettings,
+    name := "actor",
+    libraryDependencies ++= Seq(
+      Dependencies.scalareflect,
+      Dependencies.scalatest % Test,
+      Dependencies.scalacheck % Test)
+  )
+
 lazy val nbnet = (project in file("nbnet")).
+  dependsOn(util).
   dependsOn(actor).
   settings(
     commonSettings,
@@ -39,8 +51,12 @@ lazy val remote = (project in file("remote")).
   )
 
 lazy val systest = (project in file("systest")).
-  dependsOn(actor, nbnet, remote).
+  dependsOn(util, actor, nbnet, remote).
   settings(
     commonSettings,
-    name := "systest"
+    name := "systest",
+    libraryDependencies ++= Seq(
+      Dependencies.scalareflect % Provided,
+      Dependencies.scalatest % Test,
+      Dependencies.scalacheck % Test)
   )

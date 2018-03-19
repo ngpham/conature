@@ -1,8 +1,13 @@
 import sbt._
 
+object Config {
+  val scalaVer = "2.12.4"
+}
+
 object Dependencies {
   val scalatest = "org.scalatest" %% "scalatest" % "3.0.4"
   val scalacheck = "org.scalacheck" %% "scalacheck" % "1.13.4"
+  val scalareflect = "org.scala-lang" % "scala-reflect" % Config.scalaVer
 }
 
 object CompilerOptions {

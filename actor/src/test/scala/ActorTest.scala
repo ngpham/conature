@@ -46,8 +46,8 @@ class NextBehavior extends Behavior[Message] {
 class ActorTest extends FlatSpec {
   "A StateActor" should "handle timeouts and messages" in {
     val context = ActorContext.createDefault()
-    val a = context.create(new TestBehavior)
-    val b = context.create(new TestBehavior)
+    val a = context.spawn(new TestBehavior)
+    val b = context.spawn(new TestBehavior)
 
     // a ! Message(1, b)
     Thread.sleep(2000)
@@ -66,6 +66,6 @@ class ActorTest extends FlatSpec {
     Thread.sleep(3000)
     a.terminate()
     b.terminate()
-    context.shutdown()
+    context.stop()
   }
 }

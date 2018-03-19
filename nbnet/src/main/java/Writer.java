@@ -1,15 +1,15 @@
 
 package np.conature.nbnet;
 
-import np.conature.actor.ConQueue;
-import np.conature.actor.MpscQueue;
-
 import java.nio.ByteBuffer;
 import java.nio.channels.SocketChannel;
 import java.nio.channels.SelectionKey;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicIntegerFieldUpdater;
 import java.io.IOException;
+
+import np.conature.util.ConQueue;
+import np.conature.util.MpscQueue;
 
 class Writer {
   static final int SendingNotInitialized = 1;

@@ -1,5 +1,5 @@
 
-package np.conature.actor;
+package np.conature.util;
 
 import java.util.function.Consumer;
 

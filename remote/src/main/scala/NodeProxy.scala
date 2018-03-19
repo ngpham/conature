@@ -35,6 +35,7 @@ extends NodeProxy {
     case ConnectionClosure(_) =>
       if (buffer.nonEmpty)
         println(s"Link is not established. Some messages are not sent to $remoteIdentity")
+      // should have a hook for user-code to take action... event bus.
       terminate()
       this
     case _ => this
@@ -47,37 +48,37 @@ private[remote] class ActiveProxy(
     val buffer: Buffer[DataMessage] = Buffer.empty,
     val remoteIdentity: Option[InetSocketAddress] = None)
 extends NodeProxy {
+
   def apply(cep: CommandEventProtocol): Behavior[CommandEventProtocol] = cep match {
     case SendMessage(dMsg, _) =>
-      _serializeThenSend(dMsg)
+      serializeThenSend(dMsg)
       this
     case Flush =>
-      buffer.foreach(_serializeThenSend(_))
+      buffer.foreach(serializeThenSend(_))
       buffer.clear()
       this
     case ConnectionClosure(_) =>
       if (buffer.nonEmpty)
-        println(s"Link is not established. Some messages are not sent to $remoteIdentity")
+        println(s"Link failed/unestablished. Some messages are not sent.")
       terminate()
       this
     case InboundMessage(_, rawMsg) =>
-      _deserializeThenDeliver(rawMsg)
+      deserializeThenDeliver(rawMsg)
       this
 
     case _ => this
   }
 
-  def _serializeThenSend(dMsg: DataMessage): Unit = netSrv.serializer.toBinary(dMsg) match {
+  def serializeThenSend(dMsg: DataMessage): Unit = netSrv.serializer.toBinary(dMsg) match {
     case Success(x) => sockCtx.send(x); ()
     case Failure(e) => println(s"Error serializing ${dMsg.data}. $e")
   }
 
-  def _deserializeThenDeliver(rawMsg: Array[Byte]): Unit =
+  def deserializeThenDeliver(rawMsg: Array[Byte]): Unit =
     netSrv.serializer.fromBinary(rawMsg) match {
       case Success(dMsg: DataMessage) =>
         netSrv.lookupLocal(dMsg.recipient) map (_ ! dMsg.data)
         ()
       case _ => println("Failed to deserialize")
   }
-
 }

@@ -6,6 +6,8 @@ import java.util.function.Consumer
 import scala.util.control.NonFatal
 import scala.concurrent.duration.{ Duration, FiniteDuration }
 
+import np.conature.util.{ ConQueue, MpscQueue }
+
 trait Actor[-A] {
   def !(message: A): Unit
   def terminate(): Unit
@@ -31,7 +33,9 @@ trait Behavior[-T] extends Function1[T, Behavior[T]] {
     selfref = a.asInstanceOf[ActorImplementation[T]]
   }
 
-  def terminate(): Unit = selfref.terminate()
+  def terminate(): Unit = {
+    selfref.terminate()
+  }
 
   def setTimeout(duration: Duration)(callback: => Unit) = {
     timeoutDuration = duration
@@ -84,7 +88,6 @@ extends JActor with ActorInner with Actor[A] { actorA =>
   private def schedule(): Unit = {
     cancelTimeout()
     context.strategy(act())
-    ()
   }
 
   private def scheduleTimeout(): Unit = {
@@ -104,17 +107,21 @@ extends JActor with ActorInner with Actor[A] { actorA =>
     }
   }
 
-  private[this] val _mboxAct = new Consumer[A] {
+  private[this] val mboxAct = new Consumer[A] {
     def accept(a: A): Unit =
       if (!terminated)
         try {
-          val _b = behavior(a)
-          if (_b ne behavior) { cancelTimeout(); behavior = _b }
+          val b = behavior(a)
+          if (b ne behavior) {
+            cancelTimeout()
+            behavior = b
+            b.updateSelf(actorA)
+          }
         } catch { case ex: Throwable => onError(ex) }
   }
 
   private def act(): Unit = {
-    mailbox.batchConsume(16, _mboxAct)
+    mailbox.batchConsume(16, mboxAct)
 
     if (mailbox.isLoaded) schedule()
     else {
@@ -145,6 +152,6 @@ object Actor {
   val rethrow: Throwable => Unit = e => e match {
     case _: InterruptedException => throw e
     case NonFatal(e) => throw e
-    case _ => throw e
+    case _: Throwable => throw e
   }
 }

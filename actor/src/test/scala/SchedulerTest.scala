@@ -1,4 +1,4 @@
-package np.actortesting
+package np.conature.actortesting
 
 import org.scalatest.FlatSpec
 import scala.concurrent.duration._

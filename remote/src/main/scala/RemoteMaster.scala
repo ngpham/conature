@@ -1,13 +1,13 @@
 
 package np.conature.remote
 
-import np.conature.actor.{ Behavior, Actor }
-import messages.{ CommandEventProtocol, LinkTo, UnLinkTo, SendMessage, Flush,
-  ConnectionAcceptance, ConnectionClosure, InboundMessage, RemoveAllProxies }
-
 import java.net.InetSocketAddress
 
 import scala.collection.mutable.Map
+
+import np.conature.actor.{ Behavior, Actor }
+import messages.{ CommandEventProtocol, LinkTo, UnLinkTo, SendMessage, Flush,
+  ConnectionAcceptance, ConnectionClosure, InboundMessage, RemoveAllProxies }
 
 class RemoteMaster(val netSrv: NetworkService)
 extends Behavior[CommandEventProtocol] {
@@ -15,15 +15,15 @@ extends Behavior[CommandEventProtocol] {
 
   def apply(cep: CommandEventProtocol): Behavior[CommandEventProtocol] = cep match {
     case LinkTo(node) =>
-      _getOrElseCreateLinkTo(node)
+      getOrElseCreateLinkTo(node)
       this
     case UnLinkTo(_) => this
     case SendMessage(_, node) =>
-      val proxy = _getOrElseCreateLinkTo(node)
+      val proxy = getOrElseCreateLinkTo(node)
       proxy ! cep
       this
     case RemoveAllProxies =>
-      isaToProxy.foreach(kv => kv._2.terminate())
+      isaToProxy.foreach(kv => kv._2 ! ConnectionClosure(kv._1))
       isaToProxy.clear()
       this
     case Flush => this
@@ -32,7 +32,7 @@ extends Behavior[CommandEventProtocol] {
       val proxy = isaToProxy.getOrElse(sctx.remoteIdentity, null)
       if (proxy ne null) proxy ! cep
       else isaToProxy += (sctx.remoteAddress ->
-          netSrv.actorCtx.create(new ActiveProxy(netSrv, sctx)))
+          netSrv.actorCtx.spawn(new ActiveProxy(netSrv, sctx)))
       this
     case ConnectionClosure(addressOrId) =>
       val proxy = isaToProxy.getOrElse(addressOrId, null)
@@ -47,10 +47,9 @@ extends Behavior[CommandEventProtocol] {
       this
   }
 
-  private def _getOrElseCreateLinkTo(node: InetSocketAddress): Actor[CommandEventProtocol] =
+  private def getOrElseCreateLinkTo(node: InetSocketAddress): Actor[CommandEventProtocol] =
     isaToProxy.getOrElseUpdate(node, {
       netSrv.nbTcp.connect(node)
-      netSrv.actorCtx.create(new PendingProxy(netSrv, Some(node)))
+      netSrv.actorCtx.spawn(new PendingProxy(netSrv, Some(node)))
     })
-
 }

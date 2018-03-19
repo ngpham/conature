@@ -6,20 +6,25 @@ import java.io.{ InputStream, ByteArrayInputStream, ByteArrayOutputStream, Objec
 import scala.util.Try
 
 class Serializer(val clzLoader: Option[ClassLoader] = None) {
-  def toBinary(o: Serializable): Try[Array[Byte]] = Try {
+  def toBinary(o: Serializable): Try[Array[Byte]] = {
     val baos = new ByteArrayOutputStream()
     val oos = new ObjectOutputStream(baos)
-    oos.writeObject(o)
-    oos.flush()
-    baos.toByteArray()
+    val res = Try {
+      oos.writeObject(o)
+      oos.flush()
+      baos.toByteArray()
+    }
+    oos.close()
+    res
   }
 
-  def fromBinary(bytes: Array[Byte]): Try[AnyRef] = Try {
+  def fromBinary(bytes: Array[Byte]): Try[AnyRef] = {
     val bais = new ByteArrayInputStream(bytes)
     val ois = clzLoader.map(new ObjectInputStreamWithClassLoader(bais, _)).
       getOrElse(new ObjectInputStream(bais))
-
-    ois.readObject()
+    val res = Try { ois.readObject() }
+    ois.close()
+    res
   }
 }
 

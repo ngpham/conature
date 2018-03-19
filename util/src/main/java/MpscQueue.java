@@ -1,4 +1,4 @@
-package np.conature.actor;
+package np.conature.util;
 
 import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
 import java.util.function.Consumer;
