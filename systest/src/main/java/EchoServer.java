@@ -44,11 +44,12 @@ public class EchoServer {
         .setOnConnectionEstablishedHandler((x) -> System.out.println("New client connected."))
         .setOnConnectionCloseHandler(
           (x) -> System.out.println("Disconnected client: " + x))
-        .start();
+        .start(true);
       watcher.join();
     } catch (Exception e) {
       System.out.println("Ignore exception..." + e);
     }
   }
-
 }
+
+// np.conature.systest.EchoServer 9999

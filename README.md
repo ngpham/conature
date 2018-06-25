@@ -2,28 +2,18 @@
 
 Concurrent Miniature: a non-trivial name for a simple actor lib in Scala.
 
-Justification of existence: (1) akka is way too big, scalaz/lift actor is a little too small,
-Netty is doing much more than just non-blocking TCP.
-(2) D.I.Y.
+Justification of existence:
+1. It is difficult to see the core ideas from big and heavily engineered projects.
+2. Avoid bloating dependencies (almost a must in any good projects).
+3. D.I.Y.
 
 ## Features
 
-Conature actor is typed and contravariant.
+Typed, contravariant, asynchronous networked actors.
 
-Unlike scalaz actor where actor (well, everything) is promoted to be functional,
-conature actor is stateful: explicitly updates its behavior after processing each message.
+Does not have fancy features: supervision, recovery. Configuration is limited.
 
-Support for receive timeout: Unlike akka, where timeout is delivered as a message, conature timeout
-is a callback executed within the actor. One advantage of conature's choice: timeout callback is
-cancelled if it lost the race with an incoming message. If users want async timeout, they
-can set the callback action to self addressing message.
-
-Support non-blocking networking. You may take a look at systest/Peer.scala for the simplistic and
-the only one example :-). Also, you can take a look at remote implementation for an example
-of using conature actors.
-
-Does not have fancy features: supervision, recovery.
-Does not have configuration and documentation, yet.
+Does not have documentation yet.
 
 ## Design at a Glance
 
@@ -34,22 +24,49 @@ acts on typed messages. Remote actor is also typed, and having the same interfac
 The underlying execution is backed by a thread pool, and includes a single-threaded scheduler for
 timeout and scheduled tasks.
 
-The networking service (still in its primitive form) is based on Java non-blocking TCP.
-This TCP layer is thin, as we can reuse the actor system
-to have concurrent handling of networking events. The networking is hardcoded with message of
-64KB maximum. Large message transfer must be handled by client code.
+The networking service is based on Java non-blocking TCP: a single-threaded event loop with NIO
+selector. Messages and network events processing are same-thread callbacks. Messages have dynamic
+size, and is limited only by Java array size. By providing asynchronous processing in the callbacks,
+which is the case with remote actors, we have an asynchronous network application. There are also
+API for idle timeout behaviors setting, a sane default is used (see remote actors).
 
-Serialization is simply Java based. I am considering an alternative dynamic serialization approach,
-i.e. no code generation.
+Serialization is simply Java based (performance is not yet a priority).
+
+Remote actors are p2p network, i.e. every nodes have listening address.
+A peer can work in "client mode" by not configuring a listening port. In this case, client-initiated
+connection will be full-duplex. In fact, by default, conature tries to setup full-duplex channels
+after establishes a connection. [Skipping details] conature does not close connection on
+write error, but does so on read error or read idle timeout.
+
+## Project Structure
+
+`util`: Simple implementation of useful utilities: multiple producer single consumer queue,
+generic event bus, macro-based wrapper for Java Logging, hashed wheel scheduler, disruptor (idea
+from LMax disruptor, tested, but not used in the project).
+
+`actor`: Local typed actor implementation, actor-based event bus.
+
+`nbnet`: Asynchronous non-blocking TCP services.
+
+`remote`: Remote actor implementation.
+
+`systest`: Integrated tests, multiple-JVM tests (using sbt-multi-jvm plugin).
+
+## Examples
+
+Examples can be found in `systest` and test cases. Here is a demo for the chat test:
+
+From sbt, run:
+```
+systest/multi-jvm:run np.conature.systest.multijvm.Chat
+```
+sbt will fork three JVMs: one server, and two clients. Clients will try to connect, with retries
+and timeout, until the server JVM is ready. Hence we may see some report of failed to connect.
+The test asserts a number of messages broadcast then disconnect the clients. For the sever, it
+listens on the disconnect events to properly shutdown.
+
+More details to come.
 
 ## Acknowledgment
 
-akka, scalaz, lift, fpinscala, 1024cores,...
-
-## Todo
-
-- Investigate dynamic serialization.
-- Keep-alive for network links, remote loading, improve error recovery.
-- "println" began to hurt the eyes, I need a simple logger (just use the actors, maybe).
-- Performance test? Extensive networking test?
-- Examples of distributed algorithms, protocol simulations.
+akka, scalaz, netty, fpinscala, 1024cores,...

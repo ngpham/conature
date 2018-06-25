@@ -6,7 +6,7 @@ import java.util.function.Consumer;
 import np.conature.util.ConQueue;
 import np.conature.util.MpscQueue;
 
-public class CombinedTask implements Runnable {
+class CombinedTask implements Runnable {
   private ConQueue<Runnable> tasks = new MpscQueue<>();
 
   @Override

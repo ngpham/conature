@@ -1,8 +1,8 @@
-package np.conature.actor
+package np.conature.util
 
 import java.util.function.Consumer
+import java.util.concurrent.TimeUnit
 import scala.concurrent.duration.{ FiniteDuration, DurationInt }
-import np.conature.util.{ ConQueue, MpscQueue }
 
 trait Cancellable {
   def cancel(): Unit
@@ -10,13 +10,29 @@ trait Cancellable {
 }
 
 trait Scheduler {
-  def schedule(delay: FiniteDuration)(f: => Unit): Cancellable
+  def schedule(delay: FiniteDuration, recurrent: Boolean = false)(f: => Unit): Cancellable
   def shutdown(): Unit
+
+  // Currently this handler must not rethrow, to protect the scheduler thread.
+  // This limits the usage a bit (i.e. test with failed assertion will not propagate),
+  // but it is not critical for now.
+  // FixMe: make the scheduler fully async with a task queue and a respawnable thread.
+  def exceptionHandler: Throwable => Unit
+
+  // Java API
+  def schedule(delay: Long, recurrent: Boolean, f: Runnable): Cancellable =
+    schedule(delay, TimeUnit.SECONDS, recurrent, f)
+  // Java API
+  def schedule(delay: Long, timeUnit: TimeUnit, recurrent: Boolean, f: Runnable): Cancellable =
+    schedule(new FiniteDuration(delay, timeUnit), recurrent){ f.run() }
 }
 
-class HashedWheelScheduler
-    (wheelSizeInBits: Int = 8, tickDuration: FiniteDuration = 100.millisecond)
-    extends Scheduler {
+// Singlethreaded
+class HashedWheelScheduler (
+    wheelSizeInBits: Int = 8,
+    tickDuration: FiniteDuration = 100.millisecond,
+    override val exceptionHandler: Throwable => Unit = _ => ())
+extends Scheduler {
   import HashedWheelScheduler.{ Task, Bucket }
 
   val tickDurationMillis: Long = tickDuration.toMillis
@@ -26,7 +42,7 @@ class HashedWheelScheduler
 
   @volatile private var status = 1
   private val wheelSize = 1 << wheelSizeInBits
-  private val wheel = Array.fill(wheelSize)(new Bucket())
+  private val wheel = Array.fill(wheelSize)(new Bucket(exceptionHandler))
   private val tasks: ConQueue[Task] = new MpscQueue[Task]()
   private val wheelMask = wheelSize - 1
   private val startTime = System.nanoTime / 1000000
@@ -37,8 +53,9 @@ class HashedWheelScheduler
     private val _taskAct = new Consumer[Task] {
       def accept(t: Task): Unit = if (!t.isCancelled) {
         val countdownInTicks = t.countdown + currentTick
-        val countdownInCycles = countdownInTicks >> wheelSizeInBits
+        val countdownInCycles = t.countdown >> wheelSizeInBits
         val offset = countdownInTicks & wheelMask
+
         t.countdown = countdownInCycles   // valid abuse
         wheel(offset.asInstanceOf[Int]).add(t)
       }
@@ -51,22 +68,35 @@ class HashedWheelScheduler
     override def run(): Unit = while(status == 1) {
       fetchIntoWheel()
       val bucketIndex = currentTick & wheelMask
+      val wakeupAt = tickDurationMillis * (currentTick)
 
       wheel(bucketIndex).expireTasks()
 
-      currentTick = currentTick + 1
-      val wakeupAt = tickDurationMillis * (currentTick)
       val timeToSleep = wakeupAt - (System.nanoTime / 1000000 - startTime)
 
       if (timeToSleep > 0) try Thread.sleep(timeToSleep)
       catch { case _: InterruptedException => }
+      currentTick = currentTick + 1
     }
   })
   timer.setDaemon(true)
   timer.start()
 
-  override def schedule(delay: FiniteDuration)(f: => Unit): Cancellable = {
-    val task = new Task(() => f, delay.toMillis / tickDurationMillis)
+  override def schedule
+      (delay: FiniteDuration, recurrent: Boolean = false)
+      (f: => Unit): Cancellable = {
+    val numTicks = delay.toMillis / tickDurationMillis
+    val task =
+      if (!recurrent) new Task(() => f, numTicks)
+      else (new Task(() => (), numTicks) { wrapper =>
+        override val exec: () => Unit = () => {
+          if (!wrapper.isCancelled) {
+            f
+            val _ = schedule(delay, false)(wrapper.exec())
+          }
+        }
+      })
+
     tasks.offer(task)
     task
   }
@@ -75,7 +105,16 @@ class HashedWheelScheduler
 }
 
 object HashedWheelScheduler {
-  class Bucket {
+  // Java API
+  def apply(wheelSizeInBits: Int, tickDuration: Int, timeUnit: TimeUnit): Scheduler =
+    new HashedWheelScheduler(
+      wheelSizeInBits,
+      new FiniteDuration(tickDuration.asInstanceOf[Long], timeUnit))
+
+  // Java API
+  def apply(): Scheduler = new HashedWheelScheduler()
+
+  private[util] class Bucket(val exceptionHandler: Throwable => Unit) {
     private var head: Task = null
     private var tail: Task = null
 
@@ -101,7 +140,7 @@ object HashedWheelScheduler {
           else if (t.countdown <= 0) {
             try t.exec()
             catch {
-              case e: Throwable => println(e)
+              case e: Throwable => exceptionHandler(e)
             } finally {
               remove(t)
             }
@@ -113,10 +152,10 @@ object HashedWheelScheduler {
     }
   }
 
-  class Task(val exec: () => Unit, var countdown: Long) extends JCancellable with Cancellable {
+  private[util] class Task(val exec: () => Unit, var countdown: Long)
+  extends JCancellable with Cancellable {
     var prev: Task = null
     var next: Task = null
     var bucket: Bucket = null
-    def isCancelled: Boolean = state == 0
   }
 }

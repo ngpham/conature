@@ -3,6 +3,7 @@ lazy val commonSettings = Seq(
   scalaVersion := Config.scalaVer,
   version := "0.1-SNAPSHOT",
   test in assembly := {},
+  Test / parallelExecution := false,
   autoCompilerPlugins := true,
   javacOptions ++= CompilerOptions.javacOptions,
   scalacOptions ++= CompilerOptions.scalacBasic,
@@ -12,7 +13,7 @@ lazy val commonSettings = Seq(
 )
 
 lazy val root = (project in file(".")).aggregate(util, actor, nbnet, remote, systest).
-  dependsOn(actor, nbnet, remote, systest). // for 'sbt console' to find packages
+  dependsOn(util, actor, nbnet, remote, systest). // for 'sbt console' to find packages
   settings(name := "conature")
 
 lazy val util = (project in file("util")).
@@ -20,6 +21,7 @@ lazy val util = (project in file("util")).
     commonSettings,
     name := "util",
     libraryDependencies ++= Seq(
+      Dependencies.scalareflect,
       Dependencies.scalatest % Test,
       Dependencies.scalacheck % Test)
   )
@@ -56,7 +58,8 @@ lazy val systest = (project in file("systest")).
     commonSettings,
     name := "systest",
     libraryDependencies ++= Seq(
-      Dependencies.scalareflect % Provided,
-      Dependencies.scalatest % Test,
-      Dependencies.scalacheck % Test)
-  )
+      Dependencies.scalareflect,
+      Dependencies.scalatest % Test)
+  ).
+  enablePlugins(MultiJvmPlugin).
+  configs(MultiJvm)

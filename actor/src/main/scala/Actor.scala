@@ -1,84 +1,90 @@
 package np.conature.actor
 
-import java.util.concurrent.Callable
 import java.util.function.Consumer
-
+import java.util.concurrent.RejectedExecutionException
 import scala.util.control.NonFatal
+import scala.concurrent.Future
 import scala.concurrent.duration.{ Duration, FiniteDuration }
+import np.conature.util.{ ConQueue, MpscQueue, Cancellable, Log }
 
-import np.conature.util.{ ConQueue, MpscQueue }
+private[actor] trait UntypedActor {}
 
-trait Actor[-A] {
+trait Actor[-A] extends UntypedActor {
   def !(message: A): Unit
+
+  def send(message: A): Future[Unit] = {
+    this ! message
+    Future.unit
+  }
+
   def terminate(): Unit
-  def contramap[B](f: B => A): Actor[B]
+
+  @inline def isTerminated: Boolean
+  @inline def isActive: Boolean
 }
 
-private[actor] trait ActorInner {
-  def cancelTimeout(): Unit
+object Behavior {
+  val nop = new Runnable { def run = () }
+  val empty = new Behavior[Any] {
+    def apply(x: Any): Behavior[Any] = {
+      Log.info(Actor.logger, "Behavior.empty received: {0}", x)
+      this
+    }
+  }
 }
 
 trait Behavior[-T] extends Function1[T, Behavior[T]] {
-  protected[this] var selfref: ActorImplementation[T] = null
+  private[this] var inner: ActorImplementation[T] = null
 
-  private var _timeoutAction: Callable[Unit] = null
-  private var _timeoutDuration: Duration = Duration.Undefined
+  // timeout is set/modified during Behavior construct, or during message processing,
+  // thus is safe.
+  private[actor] var timeoutAction: Runnable = Behavior.nop
+  private[actor] var timeoutDuration: Duration = Duration.Undefined
 
-  def timeoutAction = _timeoutAction
-  def timeoutDuration = _timeoutDuration
-  def timeoutAction_=(c: Callable[Unit]): Unit = _timeoutAction = c
-  def timeoutDuration_=(d: Duration): Unit = _timeoutDuration = d
+  private[actor] def updateSelf(a: UntypedActor): Unit =
+    inner = a.asInstanceOf[ActorImplementation[T]]
 
-  private[actor] def updateSelf(a: ActorInner): Unit = {
-    selfref = a.asInstanceOf[ActorImplementation[T]]
-  }
-
-  def terminate(): Unit = {
-    selfref.terminate()
-  }
+  def selfref = inner.asInstanceOf[Actor[T]]
+  def context = inner.context
+  def terminate(): Unit = inner.terminate()
 
   def setTimeout(duration: Duration)(callback: => Unit) = {
+    if (timeoutAction ne Behavior.nop) inner.cancelTimeout()
     timeoutDuration = duration
-    timeoutAction = new Callable[Unit] { def call = callback }
+    timeoutAction = new Runnable { def run = callback }
   }
   def removeTimeout(): Unit = {
     disableTimeout()
-    timeoutAction = null
+    timeoutAction = Behavior.nop
   }
   def disableTimeout(): Unit = {
-    selfref.cancelTimeout()
+    inner.cancelTimeout()
     timeoutDuration = Duration.Undefined
   }
-  def enableTimeout(duration: FiniteDuration): Unit = {
-    assert(timeoutAction ne null)
-    timeoutDuration = duration
-  }
+  def enableTimeout(duration: FiniteDuration): Unit = { timeoutDuration = duration }
 }
 
 private[actor] final class ActorImplementation[-A] private
     (private[this] var behavior: Behavior[A], val onError: Throwable => Unit)
     (val context: ActorContext)
-extends JActor with ActorInner with Actor[A] { actorA =>
+extends JActor with Actor[A] { actorA =>
 
   private[this] val mailbox: ConQueue[A] = new MpscQueue[A]()
   private[this] var scheduledTimeout: Cancellable = null
 
-  @volatile private var terminated: Boolean = false
-
   def !(a: A): Unit = { mailbox.offer(a); trySchedule() }
-  def apply(a: A): Unit = this ! a
 
-  override def terminate(): Unit = { terminated = true; cancelTimeout() }
-  def isTerminated: Boolean = terminated
-  def isActive: Boolean = !terminated
+  def terminate(): Unit = if (tryTerminate()) {
+    if (unblock()) {
+      behavior = Behavior.empty
+      schedule()
+    }
+  }
 
-  def contramap[B](f: B => A): Actor[B] =
-    Actor(new Behavior[B] {
-      def apply(b: B) = { actorA ! f(b); this }
-    }, onError)(context)
+  def isTerminated: Boolean = terminated == 1
+  def isActive: Boolean = terminated == 0
 
-
-  override def cancelTimeout(): Unit = if (scheduledTimeout ne null) {
+  def cancelTimeout(): Unit = if (scheduledTimeout ne null) {
     scheduledTimeout.cancel()
     scheduledTimeout = null
   }
@@ -87,15 +93,19 @@ extends JActor with ActorInner with Actor[A] { actorA =>
 
   private def schedule(): Unit = {
     cancelTimeout()
-    context.strategy(act())
+    try {
+      context.strategy.execute(act)
+    } catch {
+      case e: RejectedExecutionException => println(e)
+    }
   }
 
   private def scheduleTimeout(): Unit = {
     if ((behavior.timeoutDuration.isFinite) && actorA.isActive && unblock()) {
       val _fd = behavior.timeoutDuration.asInstanceOf[FiniteDuration]
       scheduledTimeout = context.scheduler.schedule(_fd) {
-        if (unblock()) {
-          behavior.timeoutAction.call()
+        if (actorA.isActive && unblock()) {
+          behavior.timeoutAction.run()
           suspend()
           if (mailbox.isEmpty) scheduleTimeout()
           else trySchedule()
@@ -109,25 +119,33 @@ extends JActor with ActorInner with Actor[A] { actorA =>
 
   private[this] val mboxAct = new Consumer[A] {
     def accept(a: A): Unit =
-      if (!terminated)
-        try {
-          val b = behavior(a)
-          if (b ne behavior) {
-            cancelTimeout()
-            behavior = b
-            b.updateSelf(actorA)
-          }
-        } catch { case ex: Throwable => onError(ex) }
+      try {
+        val b = behavior(a)
+        if (isTerminated) {
+          stayTerminated()
+        } else if (b ne behavior) {
+          cancelTimeout()
+          behavior = b
+          b.updateSelf(actorA)
+        }
+      } catch { case ex: Throwable => onError(ex) }
   }
 
-  private def act(): Unit = {
-    mailbox.batchConsume(16, mboxAct)
+  private def stayTerminated() : Unit =
+    if (behavior ne Behavior.empty) {
+      cancelTimeout()
+      behavior = Behavior.empty
+    }
 
-    if (mailbox.isLoaded) schedule()
-    else {
-      suspend()
-      if (mailbox.isLoaded) trySchedule()
-      else scheduleTimeout()
+  private val act = new Runnable {
+    def run = {
+      mailbox.batchConsume(16, mboxAct)
+      if (mailbox.isLoaded) schedule()
+      else {
+        suspend()
+        if (mailbox.isLoaded) trySchedule()
+        else scheduleTimeout()
+      }
     }
   }
 }
@@ -149,9 +167,20 @@ object Actor {
       (context: ActorContext): Actor[A] =
     ActorImplementation(behavior, onError)(context)
 
+  // Thin adapter for ADT message, will be obsolete when Union Type is available in Scala 3.
+  def contramap[A, B](a: Actor[A])(f: B => A): Actor[B] =
+    new Actor[B] {
+      def !(msg: B): Unit = a ! f(msg)
+      def terminate() = a.terminate()
+      @inline def isTerminated = a.isTerminated
+      @inline def isActive = a.isActive
+    }
+
   val rethrow: Throwable => Unit = e => e match {
     case _: InterruptedException => throw e
     case NonFatal(e) => throw e
     case _: Throwable => throw e
   }
+
+  val logger = Log.logger(classOf[Actor[_]].getName)
 }

@@ -111,18 +111,40 @@ class ProducerWithTally(
   }
 }
 
-object DefaultDisruptor {
+object TestConfig {
   val sizeInBits = 8
   val nums = 1 << 16
   val maxWriteChunkSize = 128
-  def apply() = Disruptor[Int](sizeInBits)(0)
+  def defaultDisruptor() = Disruptor[Int](sizeInBits)(0)
 }
 
 class DisruptorTest extends FlatSpec {
-  import DefaultDisruptor._
+  import TestConfig._
 
-  "A Disruptor" should s"manage 4 writers, 6 readers, broadcast of ${nums} integers" in {
-    val d = DefaultDisruptor()
+  "A Disruptor" should "manage 4 writers, 6 readers, single-item multicast of 128 integers" in {
+    val d = Disruptor[Int](sizeInBits = 3)(0)
+    val test = (1 to 128).toSet
+    val writeLatch = new CountDownLatch(4)
+    val readLatch = new CountDownLatch(6)
+
+    for (i <- 1 to 6) {
+      d.registerHandler(new Reader(test, readLatch), Some(s"r${i.toString}"))
+    }
+    d.start()
+    for (i <- 1 to 4) {
+      val p = new Thread(
+        new Producer(d, 128/4, new IntGenerator(i, 4), writeLatch, 1))
+      p.setName(s"w${i.toString}")
+      p.start()
+    }
+
+    writeLatch.await()
+    d.orderlyStop()
+    readLatch.await()
+  }
+
+  it should s"manage 4 writers, 6 readers, randomly chunked multicast of ${nums} integers" in {
+    val d = defaultDisruptor()
     val test = (1 to nums).toSet
     val writeLatch = new CountDownLatch(4)
     val readLatch = new CountDownLatch(6)
@@ -144,7 +166,7 @@ class DisruptorTest extends FlatSpec {
   }
 
   it should s"send/receive all messages during orderlyStop()" in {
-    val d = DefaultDisruptor()
+    val d = defaultDisruptor()
     val test = (1 to nums).toSet
     val writeLatch = new CountDownLatch(4)
     val readLatch = new CountDownLatch(6)
@@ -173,7 +195,7 @@ class DisruptorTest extends FlatSpec {
   }
 
   it should "not deadlock/livelock under compelled shutdown" in {
-    val d = DefaultDisruptor()
+    val d = defaultDisruptor()
     val test = (1 to nums).toSet
     val writeLatch = new CountDownLatch(4)
     val readLatch = new CountDownLatch(6)
@@ -200,8 +222,8 @@ class DisruptorTest extends FlatSpec {
     readLatch.await()
   }
 
-  it should "progress with readers join/leave as will" in {
-    val d = DefaultDisruptor()
+  it should "progress with readers/writers join/leave as will" in {
+    val d = defaultDisruptor()
     val writeLatch = new CountDownLatch(4)
     val readLatch = new CountDownLatch(6)
 

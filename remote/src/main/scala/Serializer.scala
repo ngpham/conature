@@ -20,19 +20,21 @@ class Serializer(val clzLoader: Option[ClassLoader] = None) {
 
   def fromBinary(bytes: Array[Byte]): Try[AnyRef] = {
     val bais = new ByteArrayInputStream(bytes)
-    val ois = clzLoader.map(new ObjectInputStreamWithClassLoader(bais, _)).
-      getOrElse(new ObjectInputStream(bais))
+    val ois = new ObjectInputStreamWithClassLoader(bais, clzLoader)
     val res = Try { ois.readObject() }
     ois.close()
     res
   }
 }
 
-private[remote] class ObjectInputStreamWithClassLoader(in: InputStream, clzLoader: ClassLoader)
+private[remote]
+class ObjectInputStreamWithClassLoader(in: InputStream, clzLoader: Option[ClassLoader])
 extends ObjectInputStream(in) {
+  val loader = clzLoader.getOrElse(getClass.getClassLoader)
+
   override def resolveClass(desc: ObjectStreamClass): Class[_] =
     try {
-      clzLoader.loadClass(desc.getName)
+      loader.loadClass(desc.getName)
     } catch {
       case _: ClassNotFoundException => super.resolveClass(desc)
     }

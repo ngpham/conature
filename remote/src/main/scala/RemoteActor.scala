@@ -7,6 +7,7 @@ import java.net.URI
 import java.net.InetSocketAddress
 import java.io.ObjectStreamException
 import scala.util.Try
+import scala.concurrent.{ Promise, Future }
 
 @SerialVersionUID(1L)
 private[remote] final class RemoteActor[-A <: Serializable] (
@@ -16,9 +17,18 @@ private[remote] final class RemoteActor[-A <: Serializable] (
     @transient val netSrv: NetworkService)
 extends Actor[A] with Serializable {
 
-  override def !(message: A): Unit = { netSrv.send(node, name, message) }
+  override def !(message: A): Unit =
+    netSrv.send(node, message, Some(name))
+
+  override def send(message: A): Future[Unit] = {
+    val promise = Promise[Unit]()
+    netSrv.send(node, message, Some(name), Some(promise))
+    promise.future
+  }
+
   override def terminate(): Unit = ()
-  override def contramap[B](f: B => A): Actor[B] = null
+  override def isTerminated = false
+  override def isActive = true
   override def toString(): String = address
 
   @throws(classOf[ObjectStreamException])
@@ -46,9 +56,7 @@ private[remote] object RemoteActor {
     }
 
   def apply[A <: Serializable](address: String, netSrv: NetworkService): Try[RemoteActor[A]] =
-    Try {
-      apply(new URI(address), netSrv).get
-    }
+    apply(new URI(address), netSrv)
 
   def apply[A <: Serializable](
       name: String,
@@ -64,5 +72,4 @@ private[remote] object RemoteActor {
         netSrv)
       ra
     }
-
 }

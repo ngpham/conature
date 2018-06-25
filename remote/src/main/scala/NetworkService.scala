@@ -1,44 +1,48 @@
 
 package np.conature.remote
 
-import np.conature.actor.{ ActorContext, Actor, Extension }
-import np.conature.nbnet.{ NbTransport }
-import messages.{ DataMessage, SendMessage, InboundMessage, ConnectionAcceptance,
-  ConnectionClosure, RemoveAllProxies, CommandEventProtocol }
-
 import java.net.{ InetSocketAddress, URI }
-
 import scala.util.{ Try, Success, Failure }
+import scala.concurrent.Promise
 import scala.collection.concurrent.{ Map => CMap, TrieMap }
+import np.conature.actor.{ ActorContext, Actor, Extension }
+import np.conature.nbnet.NbTransport
+import np.conature.util.Log
+import messages.{ DataMessage, SendMessage, InboundMessage, ConnectionAcceptance,
+  ConnectionAttemptFailure, ConnectionClosure, RemoveAllProxies, CommandEventProtocol,
+  ContextualData, Disconnect }
 
 trait NetworkService extends Extension { netSrv =>
   private[remote] def actorCtx: ActorContext
   private[remote] def nbTcp: NbTransport
   private[remote] def serializer: Serializer
+  private[remote] def remoteMaster: Actor[CommandEventProtocol]
+
+  def localIsa: InetSocketAddress
+
+  def send[A <: Serializable](
+    node: InetSocketAddress,
+    msg: A,
+    optActorName: Option[String] = None,
+    optPrms: Option[Promise[Unit]] = None): Unit
+
+  def disconnect(node: InetSocketAddress): Unit
 
   def register(name: String, actor: Actor[_]): Boolean
   def lookupLocal(name: String): Option[Actor[Any]]
 
-  private[remote] def send[A <: Serializable](
-    node: InetSocketAddress, actorName: String, msg: A): Unit
-
-  // def connect(nodeAdr: String): Unit
-  // def disConnect(nodeAdr: String): Unit
+  def clientSeverModeMessageHandler: ContextualData => Unit
 
   def locate[A <: Serializable](actorAdr: String): Option[RemoteActor[A]] =
     RemoteActor(actorAdr, netSrv) match {
       case Success(ra) => Some(ra)
-      case Failure(e) =>
-        println(s"Error looking up remote actor. $e")
-        None
+      case Failure(_) => None
     }
 
   def locate[A <: Serializable](uri: URI): Option[RemoteActor[A]] =
     RemoteActor(uri, netSrv) match {
       case Success(ra) => Some(ra)
-      case Failure(e) =>
-        println(s"Error looking up remote actor. $e")
-        None
+      case Failure(_) => None
     }
 
   def locate[A <: Serializable](
@@ -47,16 +51,16 @@ trait NetworkService extends Extension { netSrv =>
       port: Int): Option[RemoteActor[A]] =
     RemoteActor(name, host, port, netSrv) match {
       case Success(ra) => Some(ra)
-      case Failure(e) =>
-        println(s"Error looking up remote actor. $e")
-        None
+      case Failure(_) => None
     }
 }
 
 private[remote] class NetworkServiceImpl (
     private[remote] val actorCtx: ActorContext,
     private[remote] val serializer: Serializer,
-    localAdr: String)
+    localAdr: String,
+    serverMode: Boolean,
+    val clientSeverModeMessageHandler: ContextualData => Unit)
 extends NetworkService {
 
   val localIsa = Try {
@@ -66,16 +70,18 @@ extends NetworkService {
   } match {
     case Success(x) => x
     case Failure(_) =>
-      println("NetworkService using default address: cnt://localhost:9999")
+      Log.warn(NetworkService.logger, "NetworkService using default address: cnt://localhost:9999.")
       new InetSocketAddress("localhost", 9999)
   }
 
   val localUri: String = (new URI(s"cnt://${localIsa.getHostName}:${localIsa.getPort}")).toString
-  private[remote] var nbTcp: NbTransport = null
 
-  private var localActors: CMap[String, Actor[Any]] = null
+  private val localActors: CMap[String, Actor[Any]] = TrieMap.empty[String, Actor[Any]]
 
-  private var remoteMaster: Actor[CommandEventProtocol] = null
+  private[remote] val remoteMaster: Actor[CommandEventProtocol] =
+    actorCtx.spawn(new RemoteMaster(this))
+
+  private[remote] var nbTcp: NbTransport = new NbTransport(localIsa.getPort, actorCtx.scheduler)
 
   def register(name: String, actor: Actor[_]): Boolean =
     localActors.putIfAbsent(name, actor.asInstanceOf[Actor[Any]]) match {
@@ -86,28 +92,27 @@ extends NetworkService {
   def lookupLocal(name: String): Option[Actor[Any]] = localActors.get(name)
 
   override def start(): Unit = {
-    localActors = TrieMap.empty[String, Actor[Any]]
-    remoteMaster = actorCtx.spawn(new RemoteMaster(this))
-
-    nbTcp = new NbTransport(localIsa.getPort)
-    (nbTcp
+    nbTcp
       .setInboundMessageHandler(crm =>
           remoteMaster ! InboundMessage(crm.context, crm.rawBytes))
       .setOnConnectionEstablishedHandler(sockCtx =>
           remoteMaster ! ConnectionAcceptance(sockCtx))
       .setOnConnectionAttemptFailureHandler(isa =>
-          remoteMaster ! ConnectionClosure(isa))
-      .setOnConnectionCloseHandler(isa =>
-          remoteMaster ! ConnectionClosure(isa))
-      .start())
+          remoteMaster ! ConnectionAttemptFailure(isa))
+      .setOnConnectionCloseHandler(sockCtx =>
+          remoteMaster ! ConnectionClosure(sockCtx))
+      .start(serverMode)
   }
 
-  // def connect(nodeAdr: String): Unit = ()
-  // def disConnect(nodeAdr: String): Unit = ()
+  def send[A <: Serializable](
+      node: InetSocketAddress,
+      msg: A,
+      optActorName: Option[String] = None,
+      optPrms: Option[Promise[Unit]] = None): Unit =
+    remoteMaster ! SendMessage(DataMessage(optActorName, msg), node, optPrms)
 
-  private[remote] def send[A <: Serializable](
-      node: InetSocketAddress, actorName: String, msg: A): Unit =
-    remoteMaster ! SendMessage(DataMessage(actorName, msg), node)
+  def disconnect(node: InetSocketAddress): Unit =
+    remoteMaster ! Disconnect(node)
 
   override def stop(): Unit = {
     nbTcp.shutdown()
@@ -118,14 +123,30 @@ extends NetworkService {
 }
 
 object NetworkService {
+  var enableDuplexConnection = true
+
   private[remote] var instance: NetworkService = null
 
-  def apply(actorCtx: ActorContext, localAdr: String): NetworkService = {
+  def apply(actorCtx: ActorContext, localAdr: String, serverMode: Boolean): NetworkService = {
     // cnt://host:port
+    apply(
+      actorCtx,
+      localAdr,
+      serverMode,
+      (_: ContextualData) => ())
+  }
+
+  def apply(actorCtx: ActorContext, localAdr: String, serverMode: Boolean,
+      handler: ContextualData => Unit): NetworkService = {
+    if (!serverMode) { enableDuplexConnection = true }
     instance = new NetworkServiceImpl(
       actorCtx,
       new Serializer(),
-      localAdr)
+      localAdr,
+      serverMode,
+      handler)
     instance
   }
+
+  val logger = Log.logger(classOf[NetworkService].getName)
 }

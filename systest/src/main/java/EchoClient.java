@@ -40,9 +40,8 @@ public class EchoClient {
         Random rand = new Random();
         int count = 0;
         int numMsg = (rand.nextInt(maxMsg / 4) + 1) * 4;
-
+        Socket server = new Socket();
         try {
-          Socket server = new Socket();
           server.connect(new InetSocketAddress(args[0], port), 100);
 
           InputStream in = server.getInputStream();
@@ -54,30 +53,46 @@ public class EchoClient {
             byte[] bytes = data.getBytes("UTF-8");
             int bytesLen = bytes.length;
 
-            byte[] msg = new byte[bytesLen + 2];
-            msg[0] = (byte)((bytesLen >> 8) & 0xff);
-            msg[1] = (byte)(bytesLen & 0xff);
-            for (int j = 2; j < bytesLen + 2; j++) { msg[j] = bytes[j-2]; }
+            int numBytesForSize =
+              Integer.numberOfTrailingZeros(Integer.highestOneBit(bytesLen)) / 8 + 1;
+
+            int msgLen = 1 + numBytesForSize + bytesLen;
+            byte[] msg = new byte[msgLen];
+            msg[0] = (byte)(numBytesForSize & 0xff);
+
+            int pos = 1;
+            while (bytesLen > 0) {
+              msg[pos] = (byte)(bytesLen & 0xff);
+              bytesLen = bytesLen >>> 8;
+              pos += 1;
+            }
+
+            for (int j = pos; j < msgLen; j++) {
+              msg[j] = bytes[j - 1 - numBytesForSize];
+            }
 
             out.write(msg);
 
             int totalRec = 0;
             int r = 0;
-            byte[] recv = new byte[bytesLen + 2];
-            while (totalRec < bytesLen + 2) {
-              r = in.read(recv, totalRec, bytesLen + 2 - totalRec);
+            byte[] recv = new byte[msgLen];
+            while (totalRec < msgLen) {
+              r = in.read(recv, totalRec, msgLen - totalRec);
               if (r == -1) throw new SocketException("Connection closed during read().");
               totalRec += r;
             }
 
-            byte[] payload = Arrays.copyOfRange(recv, 2, bytesLen + 2);
+            byte[] payload = Arrays.copyOfRange(recv, pos, msgLen);
 
             assert(data.equals(new String(payload, "UTF-8")));
             count += 1;
             Thread.sleep(rand.nextInt(5) + 5);
           }
-          server.close();
-        } catch (Exception e) { System.out.println(e.getMessage()); }
+        } catch (Exception e) {
+          System.out.println(e.getMessage());
+        } finally {
+          try { server.close(); } catch (Exception e) { System.out.println(e.getMessage()); }
+        }
 
         System.out.println("Total messages echoed, expected: " + numMsg + ", actual: " + count);
       }
@@ -95,3 +110,5 @@ public class EchoClient {
     }
   }
 }
+
+// np.conature.systest.EchoClient localhost 9999 10 4 256

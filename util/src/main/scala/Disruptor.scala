@@ -3,7 +3,6 @@ package np.conature.util
 
 import java.util.concurrent.locks.{ Lock, ReentrantLock, Condition, LockSupport }
 import java.util.concurrent.atomic.{ AtomicReference, AtomicLong, AtomicInteger }
-
 import scala.collection.{ mutable => mc }
 import scala.util.control.NonFatal
 import scala.reflect.ClassTag
@@ -35,6 +34,7 @@ object Disruptor {
   }
 
   def apply[T : ClassTag](sizeInBits: Int = 10)(f: => T) = new DisruptorImpl(sizeInBits)(f)
+  val logger = Log.logger(classOf[Disruptor[_]].getName)
 }
 
 private object DisruptorImpl {
@@ -106,7 +106,7 @@ private object DisruptorImpl {
           case _: InterruptedException =>
             shouldRun = false
             disruptor.readCursors.remove(cursor)
-          case e: Throwable =>
+          case e: Throwable => // Fatal Exceptions only
             disruptor.readCursors.remove(cursor)
             throw e
         } finally {
@@ -123,7 +123,7 @@ private object DisruptorImpl {
           handler(disruptor.ringBuffer.elem(i))
         } catch {
           case NonFatal(e) =>
-            println(s"Swallow Exception from user-defined handler $e")
+            println(s"Swallow NonFatal Exception from user-defined handler $e")
           case e: InterruptedException => throw e
           case e: Throwable => throw e
         } finally {

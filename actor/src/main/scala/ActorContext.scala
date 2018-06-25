@@ -1,9 +1,12 @@
 package np.conature.actor
 
-import java.util.concurrent.{ Callable, ExecutorService, ForkJoinPool, RejectedExecutionException }
+import java.util.concurrent.{ ExecutorService, ForkJoinPool }
 import scala.collection.{ mutable => mc }
+import scala.concurrent.duration.Duration
+import scala.concurrent.{ Future, ExecutionContext }
 import scala.language.dynamics
 import scala.reflect.runtime.universe.{ TypeTag, typeOf, Type }
+import np.conature.util.{ EventBus, Scheduler, HashedWheelScheduler, Log }
 
 trait Extension {
   def stop(): Unit
@@ -11,14 +14,29 @@ trait Extension {
 }
 
 trait ActorContext extends Dynamic { context =>
+  def executionPool: ExecutorService
+  def strategy: ExecutionContext
+  def scheduler: Scheduler
+  def eventBus: EventBus[Actor]
+
   private val registry = new mc.HashMap[String, (Any, Type)]
 
-  def executionPool: ExecutorService
-  def strategy: Strategy
-  def scheduler: Scheduler
-  def spawn[A](behavior: Behavior[A], onError: Throwable => Unit = Actor.rethrow): Actor[A] = {
+  def ask[A, B](
+      actor: Actor[A],
+      message: Actor[B] => A,
+      timeout: Duration = Duration.Inf): Future[B]
+
+  def spawn[A](behavior: Behavior[A], onError: Throwable => Unit = Actor.rethrow): Actor[A] =
     Actor(behavior, onError)(context)
-  }
+
+  def spawn[A](f: A => Unit): Actor[A] =
+    spawn(
+      new Behavior[A] {
+        def apply(a: A) = {
+          f(a)
+          this
+        }
+      })
 
   def selectDynamic[T: TypeTag](name: String): T = registry.get(name) match {
     case None => throw new ClassNotFoundException("Cannot find a matched registered instance")
@@ -44,37 +62,35 @@ trait ActorContext extends Dynamic { context =>
       vt._1.asInstanceOf[Extension].stop()
     }
     executionPool.shutdown()
-    postStop()
   }
-
-  def postStop: () => Unit
 }
 
 object ActorContext {
-  def createDefault(postStopHook: => Unit = ()): ActorContext = new ActorContext {
+  def createDefault(): ActorContext = new ActorContext {
     val executionPool = new ForkJoinPool()
-    val strategy = Strategy.fromExecutorService(executionPool)
-    val scheduler = new HashedWheelScheduler()
-    val postStop = () => postStopHook
-  }
-}
+    val strategy = ExecutionContext.fromExecutorService(executionPool)
+    val eventBus = new EventBusActor()
 
-trait Strategy {
-  def apply(a: => Unit): Unit
-}
+    val scheduler = new HashedWheelScheduler(
+      exceptionHandler =
+        (t: Throwable) => Log.warn(ActorContext.logger, "Exception in timed task", t)
+    )
 
-object Strategy {
-  def fromExecutorService(es: ExecutorService): Strategy = new Strategy {
-    override def apply(a: => Unit): Unit= {
-      try {
-        es execute (new Runnable { def run() = a })
-      } catch {
-        case e: RejectedExecutionException => println(e)
-      }
-    }
+    private val broker = new Broker(this)
+
+    def ask[A, B](
+        actor: Actor[A],
+        message: Actor[B] => A,
+        timeout: Duration = Duration.Inf): Future[B] =
+      broker.ask(actor, message, timeout)
   }
 
-  def sequential: Strategy = new Strategy {
-    override def apply(a: => Unit): Unit = a
+  val reuseThreadStrategy = new ExecutionContext {
+    def execute(r: Runnable): Unit = r.run()
+
+    def reportFailure(t: Throwable): Unit =
+      Log.info(Actor.logger, "Error in reuseThreadStrategy Execution:", t)
   }
+
+  val logger = Log.logger(classOf[ActorContext].getName)
 }

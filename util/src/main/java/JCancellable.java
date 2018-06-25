@@ -1,4 +1,4 @@
-package np.conature.actor;
+package np.conature.util;
 
 import java.util.concurrent.atomic.AtomicIntegerFieldUpdater;
 
@@ -10,4 +10,5 @@ abstract class JCancellable {
   protected volatile int state = 1;
 
   public void cancel() { __state.compareAndSet(this, 1, 0); }
+  public boolean isCancelled() { return state == 0; }
 }
