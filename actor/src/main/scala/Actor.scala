@@ -7,9 +7,7 @@ import scala.concurrent.Future
 import scala.concurrent.duration.{ Duration, FiniteDuration }
 import np.conature.util.{ ConQueue, MpscQueue, Cancellable, Log }
 
-private[actor] trait UntypedActor {}
-
-trait Actor[-A] extends UntypedActor {
+trait Actor[-A] {
   def !(message: A): Unit
 
   def send(message: A): Future[Unit] = {
@@ -41,8 +39,9 @@ trait Behavior[-T] extends Function1[T, Behavior[T]] {
   private[actor] var timeoutAction: Runnable = Behavior.nop
   private[actor] var timeoutDuration: Duration = Duration.Undefined
 
-  private[actor] def updateSelf(a: UntypedActor): Unit =
-    inner = a.asInstanceOf[ActorImplementation[T]]
+  private[actor]
+  def updateSelf(a: ActorImplementation[T @annotation.unchecked.uncheckedVariance]): Unit =
+    inner = a
 
   def selfref = inner.asInstanceOf[Actor[T]]
   def context = inner.context

@@ -52,6 +52,7 @@ class PingPongBehavior(val limit: Int, val latch: CountDownLatch) extends Behavi
       latch.countDown()
       terminate()
     }
+    ()
   }
   setTimeout(Duration("500ms")) { destruct() }
 }

@@ -1,3 +1,5 @@
+// example run of multi-jvm test:
+// systest/multi-jvm:run np.conature.systest.multijvm.Chat
 lazy val commonSettings = Seq(
   organization := "np",
   scalaVersion := Config.scalaVer,

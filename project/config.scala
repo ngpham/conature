@@ -1,7 +1,7 @@
 import sbt._
 
 object Config {
-  val scalaVer = "2.12.4"
+  val scalaVer = "2.12.7"
 }
 
 object Dependencies {
@@ -74,8 +74,8 @@ object CompilerOptions {
   )
 
   val javacOptions = Seq(
-    "-target", "9",
-    "-source", "9",
+    "-target", "10",
+    "-source", "10",
     "-encoding", "utf-8",
     "-Xlint:all",
     "-Werror"

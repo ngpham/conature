@@ -20,12 +20,15 @@ object ChatMultiJvmNode1 {
 
 class ClientController(port: Int, numMsg: Int) {
   def run(): Unit = {
-    val localAdr = s"cnt://localhost:$port"
+    NetworkService.Config.uriStr = s"cnt://localhost:$port"
+    NetworkService.Config.bindPort = port
+    NetworkService.Config.serverMode = false
+
     val latchMsg = new CountDownLatch(1)
     val latchSys = new CountDownLatch(1)
     var count = 0
     val context = ActorContext.createDefault()
-    context.register("netsrv")(NetworkService(context, localAdr, serverMode = false))
+    context.register("netsrv")(NetworkService(context))
     context.start()
 
     val srv = context.netsrv[NetworkService].locate[Message](
@@ -61,6 +64,7 @@ class ClientController(port: Int, numMsg: Int) {
 
     latchMsg.await()
     context.netsrv[NetworkService].disconnect(new InetSocketAddress("localhost", 9999))
+    println(s"Chat client completed $count messages.")
     latchSys.await()
     context.stop()
   }
@@ -68,14 +72,14 @@ class ClientController(port: Int, numMsg: Int) {
 
 object ChatMultiJvmNode2 {
   def main(args: Array[String]): Unit =  {
-    val cc = new ClientController(7777, 128)
+    val cc = new ClientController(7777, 1024)
     cc.run()
   }
 }
 
 object ChatMultiJvmNode3 {
   def main(args: Array[String]): Unit =  {
-    val cc = new ClientController(8888, 64)
+    val cc = new ClientController(8888, 1024)
     cc.run()
   }
 }

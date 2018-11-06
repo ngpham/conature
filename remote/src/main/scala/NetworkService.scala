@@ -18,7 +18,7 @@ trait NetworkService extends Extension { netSrv =>
   private[remote] def serializer: Serializer
   private[remote] def remoteMaster: Actor[CommandEventProtocol]
 
-  def localIsa: InetSocketAddress
+  def uniqIsa: InetSocketAddress
 
   def send[A <: Serializable](
     node: InetSocketAddress,
@@ -58,30 +58,35 @@ trait NetworkService extends Extension { netSrv =>
 private[remote] class NetworkServiceImpl (
     private[remote] val actorCtx: ActorContext,
     private[remote] val serializer: Serializer,
-    localAdr: String,
+    uriStr: String,
+    bindHost: String,
+    bindPort: Int,
     serverMode: Boolean,
     val clientSeverModeMessageHandler: ContextualData => Unit)
 extends NetworkService {
 
-  val localIsa = Try {
-    val uri = new URI(localAdr)
+  val uniqIsa = Try {
+    val uri = new URI(uriStr)
     if (uri.getScheme != "cnt") throw new IllegalArgumentException()
     new InetSocketAddress(uri.getHost(), uri.getPort().toInt)
   } match {
     case Success(x) => x
     case Failure(_) =>
-      Log.warn(NetworkService.logger, "NetworkService using default address: cnt://localhost:9999.")
+      Log.warn(
+        NetworkService.logger,
+        "NetworkService using default address: cnt://localhost:9999 which is not Internet-reachable.")
       new InetSocketAddress("localhost", 9999)
   }
 
-  val localUri: String = (new URI(s"cnt://${localIsa.getHostName}:${localIsa.getPort}")).toString
+  // val localUri: String = (new URI(s"cnt://${uniqIsa.getHostName}:${uniqIsa.getPort}")).toString
 
   private val localActors: CMap[String, Actor[Any]] = TrieMap.empty[String, Actor[Any]]
 
   private[remote] val remoteMaster: Actor[CommandEventProtocol] =
     actorCtx.spawn(new RemoteMaster(this))
 
-  private[remote] var nbTcp: NbTransport = new NbTransport(localIsa.getPort, actorCtx.scheduler)
+  private[remote] var nbTcp: NbTransport =
+    new NbTransport(bindHost, bindPort, actorCtx.scheduler)
 
   def register(name: String, actor: Actor[_]): Boolean =
     localActors.putIfAbsent(name, actor.asInstanceOf[Actor[Any]]) match {
@@ -123,30 +128,30 @@ extends NetworkService {
 }
 
 object NetworkService {
-  var enableDuplexConnection = true
+  object Config {
+    var enableDuplexConnection = true
+    var uriStr = "cnt://localhost:9999"
+    var bindHost = "127.0.0.1"
+    var bindPort = 9999
+    var serverMode = true
+    var classicMsgHandler: ContextualData => Unit = (_:ContextualData) => ()
+  }
 
   private[remote] var instance: NetworkService = null
 
-  def apply(actorCtx: ActorContext, localAdr: String, serverMode: Boolean): NetworkService = {
-    // cnt://host:port
-    apply(
-      actorCtx,
-      localAdr,
-      serverMode,
-      (_: ContextualData) => ())
-  }
-
-  def apply(actorCtx: ActorContext, localAdr: String, serverMode: Boolean,
-      handler: ContextualData => Unit): NetworkService = {
-    if (!serverMode) { enableDuplexConnection = true }
+  def apply(actorCtx: ActorContext): NetworkService = {
     instance = new NetworkServiceImpl(
       actorCtx,
       new Serializer(),
-      localAdr,
-      serverMode,
-      handler)
+      Config.uriStr,
+      Config.bindHost,
+      Config.bindPort,
+      Config.serverMode,
+      Config.classicMsgHandler)
     instance
   }
 
   val logger = Log.logger(classOf[NetworkService].getName)
 }
+
+// TODO: NbTransport should have constructor with binding isa address

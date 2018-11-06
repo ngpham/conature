@@ -56,10 +56,13 @@ extends ClientBehavior {
 
 object Client {
   def main(args: Array[String]): Unit = {
-    val localAdr = s"cnt://localhost:${args(0)}"
+    NetworkService.Config.uriStr = s"cnt://localhost:${args(0)}"
+    NetworkService.Config.bindPort = args(0).toInt
+    NetworkService.Config.serverMode = false
+
     val latch = new CountDownLatch(1)
     val context = ActorContext.createDefault()
-    context.register("netsrv")(NetworkService(context, localAdr, serverMode = false))
+    context.register("netsrv")(NetworkService(context))
     context.start()
 
     val srv = context.netsrv[NetworkService].locate[Message](
@@ -74,7 +77,7 @@ object Client {
     context.netsrv[NetworkService].register("client", client)
 
     context.eventBus.subscribe(context.spawn(
-      (e: DisconnectEvent) => latch.countDown()
+      (_: DisconnectEvent) => latch.countDown()
     ))
 
     var line = ""

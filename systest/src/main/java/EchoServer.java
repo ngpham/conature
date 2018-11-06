@@ -12,8 +12,9 @@ public class EchoServer {
   private NbTransport netSrv;
 
   public static void main(String[] args) {
-    int port = 9999;
-    if (args.length == 1) port = Integer.parseInt(args[0]);
+    int port = Integer.parseInt(args[0]);
+    int maxNumMsg = Integer.parseInt(args[1]);
+
     EchoServer instance = new EchoServer();
     instance.netSrv = new NbTransport(port);
 
@@ -23,7 +24,7 @@ public class EchoServer {
       public void accept(ContextualRawMessage msg) {
         msg.context.send(msg.rawBytes);
         limit += 1;
-        if (limit > 512) instance.netSrv.shutdown();
+        if (limit > maxNumMsg) instance.netSrv.shutdown();
       }
     };
 
@@ -52,4 +53,4 @@ public class EchoServer {
   }
 }
 
-// np.conature.systest.EchoServer 9999
+// np.conature.systest.EchoServer 9999 512

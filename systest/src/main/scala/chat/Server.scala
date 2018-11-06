@@ -54,11 +54,12 @@ class ServerAct(val limit: Int, val address: Actor[Message]) extends Behavior[Me
 
 object Server {
   def main(args: Array[String]): Unit = {
-    val localAdr = s"cnt://localhost:${args(0)}"
+    NetworkService.Config.uriStr = s"cnt://localhost:${args(0)}"
+    NetworkService.Config.bindPort = args(0).toInt
     val latch = new CountDownLatch(1)
     val context = ActorContext.createDefault()
 
-    context.register("netsrv")(NetworkService(context, localAdr, serverMode = true))
+    context.register("netsrv")(NetworkService(context))
     context.start()
 
     val address = context.netsrv[NetworkService].locate[Message](
@@ -67,7 +68,7 @@ object Server {
     val srv = context.spawn(new ServerAct(args(1).toInt, address))
 
     context.eventBus.subscribe(Actor.contramap(srv){
-      e: DisconnectEvent => SessionEnd(() => latch.countDown())
+      _: DisconnectEvent => SessionEnd(() => latch.countDown())
     })
 
     context.netsrv[NetworkService].register("chatservice", srv)

@@ -39,7 +39,7 @@ public class NbTransport {
   protected Selector selector;
   protected Scheduler scheduler;
 
-  private int port;
+  private InetSocketAddress bindingAdr;
   private AtomicInteger state;
 
   @SuppressWarnings("unchecked")
@@ -62,8 +62,18 @@ public class NbTransport {
     this(port, HashedWheelScheduler.apply());
   }
 
+  public NbTransport(String host, int port) {
+    this(host, port, HashedWheelScheduler.apply());
+  }
+
   public NbTransport(int port, Scheduler scheduler) {
-    this.port = port;
+    this.bindingAdr = new InetSocketAddress(port);
+    this.scheduler = scheduler;
+    this.state = new AtomicInteger(-1);
+  }
+
+  public NbTransport(String host, int port, Scheduler scheduler) {
+    this.bindingAdr = new InetSocketAddress(host, port);
     this.scheduler = scheduler;
     this.state = new AtomicInteger(-1);
   }
@@ -95,7 +105,7 @@ public class NbTransport {
     if (serverMode) {
       acceptor = ServerSocketChannel.open();
       acceptor.configureBlocking(false);
-      acceptor.bind(new InetSocketAddress(port));
+      acceptor.bind(this.bindingAdr);
       acceptor.register(selector, SelectionKey.OP_ACCEPT);
     }
 

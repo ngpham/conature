@@ -37,7 +37,7 @@ extends NodeProxy {
       this
     case ConnectionAcceptance(sctx) =>
       val ap = new ActiveProxy(netSrv, sctx, buffer, remoteIdentity)
-      if (NetworkService.enableDuplexConnection) selfref ! AdviceReuseConnection
+      if (NetworkService.Config.enableDuplexConnection) selfref ! AdviceReuseConnection
       if (buffer.nonEmpty) selfref ! Flush
       ap
     case ConnectionAttemptFailure(_) =>
@@ -73,7 +73,7 @@ extends NodeProxy {
       sendNotificationThenDisconnect()
       this
     case AdviceReuseConnection =>
-      serializeThenSend(ReuseConnectionMessage(netSrv.localIsa))
+      serializeThenSend(ReuseConnectionMessage(netSrv.uniqIsa))
       this
     case ConnectionClosure(_) =>
       if (buffer.nonEmpty)
