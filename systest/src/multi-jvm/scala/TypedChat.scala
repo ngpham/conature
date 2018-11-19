@@ -9,16 +9,16 @@ import np.conature.remote.{ NetworkService }
 import np.conature.remote.events.DisconnectEvent
 import np.conature.systest.chat._
 
-// systest/multi-jvm:run np.conature.systest.multijvm.Chat
+// systest/multi-jvm:run np.conature.systest.multijvm.TypedChat
 
-object ChatMultiJvmNode1 {
+object TypedChatMultiJvmNode1 {
   def main(args: Array[String]): Unit =  {
     np.conature.nbnet.Config.shortReadIdle = 1
     Server.main(Array("9999", "2"))
   }
 }
 
-class ClientController(port: Int, numMsg: Int) {
+class TypedClientController(port: Int, numMsg: Int) {
   def run(): Unit = {
     NetworkService.Config.uriStr = s"cnt://localhost:$port"
     NetworkService.Config.bindPort = port
@@ -37,7 +37,7 @@ class ClientController(port: Int, numMsg: Int) {
     val endpoint = context.netsrv[NetworkService].locate[Message](
       s"cnt://client@localhost:$port").get
 
-    val client: Actor[Any] = context.spawn(new ClientOffline(endpoint)(_ => {
+    val client = context.spawn(new TypedClientOffline(endpoint)(_ => {
       count += 1
       if (count == numMsg) latchMsg.countDown()
     }))
@@ -52,7 +52,10 @@ class ClientController(port: Int, numMsg: Int) {
 
     while (!loggedin)
       try {
-        val fut: Future[LoginResult] = context.ask(client, DoLogin(srv, _))
+        val fut: Future[LoginResult] =
+          context.ask[UnionMsg, LoginResult](client, (x: Actor[LoginResult]) => {
+              ClientCmd(DoLogin(srv, x))
+          } : UnionMsg)
         Await.result(fut, Duration("1s")) match {
           case LoginSuccess(_) => loggedin = true
         }
@@ -60,7 +63,7 @@ class ClientController(port: Int, numMsg: Int) {
         case _: java.util.concurrent.TimeoutException => ()
       }
 
-    for (_ <- 1 to numMsg) client ! SendMessage("something")
+    for (_ <- 1 to numMsg) client ! ClientCmd(SendMessage("something"))
 
     latchMsg.await()
     context.netsrv[NetworkService].disconnect(new InetSocketAddress("localhost", 9999))
@@ -70,14 +73,14 @@ class ClientController(port: Int, numMsg: Int) {
   }
 }
 
-object ChatMultiJvmNode2 {
+object TypedChatMultiJvmNode2 {
   def main(args: Array[String]): Unit =  {
     val cc = new ClientController(7777, 1024)
     cc.run()
   }
 }
 
-object ChatMultiJvmNode3 {
+object TypedChatMultiJvmNode3 {
   def main(args: Array[String]): Unit =  {
     val cc = new ClientController(8888, 1024)
     cc.run()
