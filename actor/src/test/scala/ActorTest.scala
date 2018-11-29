@@ -13,14 +13,14 @@ case class Reply(x: Int)
 class RequestHandler extends Behavior[Request] {
   def apply(msg: Request) = {
     msg.repTo ! Reply(2 * msg.x)
-    this
+    Behavior.same
   }
 }
 
 class LongRunningRequestHandler extends Behavior[Request] {
   def apply(msg: Request) = {
     // silently ignore the request
-    this
+    Behavior.same
   }
 }
 
@@ -29,7 +29,7 @@ case class Simple(x: Int)
 class SimpleBehavior extends Behavior[Simple] {
   def apply(msg: Simple) = {
     println(s"received msg: $msg")
-    this
+    Behavior.same
   }
 }
 
@@ -41,12 +41,12 @@ class PingPongBehavior(val limit: Int, val latch: CountDownLatch) extends Behavi
     i = msg.x
     if (msg.x < limit)
       msg.sender ! PingPongMsg(selfref, msg.x + 1)
-    this
+    Behavior.same
   }
   def destruct(): Unit = {
     try {
-      // FixMe: for a sane Scheduler.exceptionHandler, the exception does not have a chance to
-      // propagate to test report.
+      // FixMe: with the current Scheduler.exceptionHandler, the exception does not have a chance
+      // to propagate to test report.
       assert((i == limit) || (i == limit - 1))
     } finally {
       latch.countDown()
@@ -60,9 +60,9 @@ class PingPongBehavior(val limit: Int, val latch: CountDownLatch) extends Behavi
 case class GenericMessage[T](x: T)
 
 class GenericBehavior[T](latch: CountDownLatch) extends Behavior[GenericMessage[T]] {
-  def apply(x: GenericMessage[T]): GenericBehavior[T] = {
+  def apply(x: GenericMessage[T]): Behavior[GenericMessage[T]] = {
     latch.countDown()
-    this
+    Behavior.same
   }
 }
 
@@ -106,7 +106,7 @@ class ActorTest extends FlatSpec {
       def apply(msg: Simple) = {
         sum += msg.x
         if (msg.x == 4) { terminate(); latch.countDown() }
-        this
+        Behavior.same
       }
     })
 
@@ -126,7 +126,7 @@ class ActorTest extends FlatSpec {
       def apply(msg: Simple) = {
         sum += msg.x
         if (msg.x == 4) { terminate(); latch.countDown() }
-        this
+        Behavior.same
       }
 
       setTimeout(Duration("50ms")) { sum = sum * 2 }
@@ -148,7 +148,7 @@ class ActorTest extends FlatSpec {
       def apply(msg: Simple) = {
         sum += msg.x
         if (msg.x == 4) { terminate(); latch.countDown() }
-        this
+        Behavior.same
       }
 
       setTimeout(Duration("50ms")) { sum = sum * 2 }

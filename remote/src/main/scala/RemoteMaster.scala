@@ -24,16 +24,16 @@ extends Behavior[CommandEventProtocol] {
             NetworkService.logger,
             "Unexpected severe error. {0}: Failed to find/create connection.")
       }
-      this
+      Behavior.same
     case RemoveAllProxies =>
       isaToProxy.foreach(kv => kv._2 ! ConnectionClosure(null)) // ugly null, but ok
       isaToProxy.clear()
-      this
+      Behavior.same
     case Disconnect(node) =>
       identityToRemoteAddress.get(node) map { isa: InetSocketAddress =>
         isaToProxy.get(isa) map (proxy => proxy ! Disconnect(node))
       }
-      this
+      Behavior.same
     case UpdateRemoteIdentity(identity, address) =>
       identityToRemoteAddress.get(identity) map { oldRemoteAddress =>
         // identity -> oldRemoteAddress -> proxy
@@ -45,7 +45,7 @@ extends Behavior[CommandEventProtocol] {
         }
       }
       identityToRemoteAddress += (identity -> address)
-      this
+      Behavior.same
     case ConnectionAcceptance(sctx) =>
       if (sctx.remoteIdentity ne null) { // complete a pending connection initiated by us
         try {
@@ -63,12 +63,12 @@ extends Behavior[CommandEventProtocol] {
         isaToProxy +=
           (sctx.remoteAddress -> netSrv.actorCtx.spawn(new ActiveProxy(netSrv, sctx)))
       }
-      this
+      Behavior.same
     case ConnectionAttemptFailure(address) =>
       // identity -> pendingProxy. This is outgoing connection, not yet established.
       isaToProxy.get(address) map (_ ! cep)
       isaToProxy -= address
-      this
+      Behavior.same
     case ConnectionClosure(sctx) =>
       // Clean up the mapping and the proxy: sctx.remoteAddress -> proxy
       // Remove mapping: sctx.identity -> sctx.remoteAddress, only if any, as identity may be
@@ -81,15 +81,14 @@ extends Behavior[CommandEventProtocol] {
       if (remoteAddress == sctx.remoteAddress) {
         identityToRemoteAddress -= sctx.remoteIdentity
       }
-      this
+      Behavior.same
     case InboundMessage(sctx, _) =>
       val proxy = isaToProxy.getOrElse(
         sctx.remoteIdentity,
         isaToProxy.getOrElse(sctx.remoteAddress, null))
       if (proxy ne null) proxy ! cep
-      this
-    case _ =>
-      this
+      Behavior.same
+    case _ => Behavior.same
   }
 
   // If connection is established, we have:

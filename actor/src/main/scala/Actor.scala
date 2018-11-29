@@ -3,17 +3,11 @@ package np.conature.actor
 import java.util.function.Consumer
 import java.util.concurrent.RejectedExecutionException
 import scala.util.control.NonFatal
-import scala.concurrent.Future
 import scala.concurrent.duration.{ Duration, FiniteDuration }
 import np.conature.util.{ ConQueue, MpscQueue, Cancellable, Log }
 
 trait Actor[-A] {
   def !(message: A): Unit
-
-  def send(message: A): Future[Unit] = {
-    this ! message
-    Future.unit
-  }
 
   def terminate(): Unit
 
@@ -23,9 +17,17 @@ trait Actor[-A] {
 
 object Behavior {
   val nop = new Runnable { def run = () }
+
   val empty = new Behavior[Any] {
     def apply(x: Any): Behavior[Any] = {
       Log.info(Actor.logger, "Behavior.empty received: {0}", x)
+      this
+    }
+  }
+
+  val same = new Behavior[Any] {
+    def apply(x: Any): Behavior[Any] = {
+      Log.info(Actor.logger, "Behavior.same should NOT be invoked. Unhandled message: {0}", x)
       this
     }
   }
@@ -64,7 +66,7 @@ trait Behavior[-T] extends Function1[T, Behavior[T]] {
 }
 
 private[actor] final class ActorImplementation[-A] private
-    (private[this] var behavior: Behavior[A], val onError: Throwable => Unit)
+    (private[this] var behavior: Behavior[A], val onError: Throwable => Behavior[A])
     (val context: ActorContext)
 extends JActor with Actor[A] { actorA =>
 
@@ -95,13 +97,15 @@ extends JActor with Actor[A] { actorA =>
     try {
       context.strategy.execute(act)
     } catch {
-      case e: RejectedExecutionException => println(e)
+      case e: RejectedExecutionException =>
+        Log.info(Actor.logger, "Failed to schedule actor {0}, error {1}", actorA, e)
     }
   }
 
   private def scheduleTimeout(): Unit = {
     if ((behavior.timeoutDuration.isFinite) && actorA.isActive && unblock()) {
       val _fd = behavior.timeoutDuration.asInstanceOf[FiniteDuration]
+
       scheduledTimeout = context.scheduler.schedule(_fd) {
         if (actorA.isActive && unblock()) {
           behavior.timeoutAction.run()
@@ -117,17 +121,23 @@ extends JActor with Actor[A] { actorA =>
   }
 
   private[this] val mboxAct = new Consumer[A] {
-    def accept(a: A): Unit =
-      try {
-        val b = behavior(a)
-        if (isTerminated) {
-          stayTerminated()
-        } else if (b ne behavior) {
-          cancelTimeout()
-          behavior = b
-          b.updateSelf(actorA)
-        }
-      } catch { case ex: Throwable => onError(ex) }
+    def accept(a: A): Unit = {
+      val b = try {
+        behavior(a)
+      } catch {
+        case ex: Throwable => onError(ex)
+      }
+
+      if (isTerminated) {
+        stayTerminated()
+      } else if (b eq Behavior.empty) {
+        terminate()
+      } else if (b ne Behavior.same) {
+        cancelTimeout()
+        behavior = b
+        b.updateSelf(actorA)
+      }
+    }
   }
 
   private def stayTerminated() : Unit =
@@ -151,7 +161,7 @@ extends JActor with Actor[A] { actorA =>
 
 private[actor] object ActorImplementation {
   def apply[A]
-      (behavior: Behavior[A], onError: Throwable => Unit)
+      (behavior: Behavior[A], onError: Throwable => Behavior[A])
       (context: ActorContext): Actor[A] = {
     val actor = new ActorImplementation(behavior, onError)(context)
     behavior.updateSelf(actor)
@@ -162,7 +172,7 @@ private[actor] object ActorImplementation {
 
 object Actor {
   def apply[A]
-      (behavior: Behavior[A], onError: Throwable => Unit = rethrow)
+      (behavior: Behavior[A], onError: Throwable => Behavior[A] = (_: Throwable) => Behavior.empty)
       (context: ActorContext): Actor[A] =
     ActorImplementation(behavior, onError)(context)
 
@@ -175,6 +185,7 @@ object Actor {
       @inline def isActive = a.isActive
     }
 
+  @deprecated("This function should not be used for Actor error handling.")
   val rethrow: Throwable => Unit = e => e match {
     case _: InterruptedException => throw e
     case NonFatal(e) => throw e

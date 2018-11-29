@@ -83,10 +83,10 @@ object TypedClient {
     while ({line = StdIn.readLine(); line.nonEmpty}) {
       line match {
         case "login" =>
-          val fut: Future[LoginResult] =
-            context.ask[UnionMsg, LoginResult](client, (x: Actor[LoginResult]) => {
-              ClientCmd(DoLogin(srv, x))
-            } : UnionMsg)
+          val fut: Future[LoginResult] = context.ask(
+            Actor.contramap(client)((x: ClientCommand) => ClientCmd(x)),
+            DoLogin(srv, _)
+          )
           try {
             Await.result(fut, Duration("1s")) match {
               case LoginSuccess(ssid) => println(s"Logged in with session: $ssid")

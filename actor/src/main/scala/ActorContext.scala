@@ -26,7 +26,9 @@ trait ActorContext extends Dynamic { context =>
       message: Actor[B] => A,
       timeout: Duration = Duration.Inf): Future[B]
 
-  def spawn[A](behavior: Behavior[A], onError: Throwable => Unit = Actor.rethrow): Actor[A] =
+  def spawn[A](
+      behavior: Behavior[A],
+      onError: Throwable => Behavior[A] = (_: Throwable) => Behavior.empty): Actor[A] =
     Actor(behavior, onError)(context)
 
   def spawn[A](f: A => Unit): Actor[A] =

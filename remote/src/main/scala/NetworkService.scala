@@ -153,5 +153,3 @@ object NetworkService {
 
   val logger = Log.logger(classOf[NetworkService].getName)
 }
-
-// TODO: NbTransport should have constructor with binding isa address

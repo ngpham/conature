@@ -7,7 +7,6 @@ import java.net.URI
 import java.net.InetSocketAddress
 import java.io.ObjectStreamException
 import scala.util.Try
-import scala.concurrent.{ Promise, Future }
 
 @SerialVersionUID(1L)
 private[remote] final class RemoteActor[-A <: Serializable] (
@@ -19,12 +18,6 @@ extends Actor[A] with Serializable {
 
   override def !(message: A): Unit =
     netSrv.send(node, message, Some(name))
-
-  override def send(message: A): Future[Unit] = {
-    val promise = Promise[Unit]()
-    netSrv.send(node, message, Some(name), Some(promise))
-    promise.future
-  }
 
   override def terminate(): Unit = ()
   override def isTerminated = false

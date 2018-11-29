@@ -14,7 +14,7 @@ lazy val commonSettings = Seq(
   publishTo := None
 )
 
-lazy val root = (project in file(".")).aggregate(util, actor, nbnet, remote, systest).
+lazy val root = (project in file(".")).aggregate(util, actor, nbnet, remote, systest, exp).
   dependsOn(util, actor, nbnet, remote, systest). // for 'sbt console' to find packages
   settings(name := "conature")
 
@@ -52,6 +52,17 @@ lazy val remote = (project in file("remote")).
   settings(
     commonSettings,
     name := "remote"
+  )
+
+lazy val exp = (project in file("exp")).
+  dependsOn(util).
+  settings(
+    commonSettings,
+    name := "exp",
+    libraryDependencies ++= Seq(
+      Dependencies.scalareflect,
+      Dependencies.scalatest % Test,
+      Dependencies.scalacheck % Test)
   )
 
 lazy val systest = (project in file("systest")).

@@ -28,13 +28,13 @@ extends NodeProxy {
   def apply(cep: CommandEventProtocol): Behavior[CommandEventProtocol] = cep match {
     case SendMessage(dMsg, _, optPromise) =>
       buffer += (dMsg -> optPromise)
-      this
+      Behavior.same
     case Disconnect(node) =>
       Log.warn(
         NetworkService.logger,
         "{0} is not connected, ignore Disconnect command. This must not happen.",
         node)
-      this
+      Behavior.same
     case ConnectionAcceptance(sctx) =>
       val ap = new ActiveProxy(netSrv, sctx, buffer, remoteIdentity)
       if (NetworkService.Config.enableDuplexConnection) selfref ! AdviceReuseConnection
@@ -49,8 +49,8 @@ extends NodeProxy {
         optPromise map (p => p failure new Exception())
       }
       terminate()
-      this
-    case _ => this
+      Behavior.same
+    case _ => Behavior.same
   }
 }
 
@@ -64,17 +64,17 @@ extends NodeProxy {
   def apply(cep: CommandEventProtocol): Behavior[CommandEventProtocol] = cep match {
     case SendMessage(dMsg, _, optPromise) =>
       serializeThenSend(dMsg, optPromise)
-      this
+      Behavior.same
     case Flush =>
       buffer.foreach(t => serializeThenSend(t._1, t._2))
       buffer.clear()
-      this
+      Behavior.same
     case Disconnect(_) =>
       sendNotificationThenDisconnect()
-      this
+      Behavior.same
     case AdviceReuseConnection =>
       serializeThenSend(ReuseConnectionMessage(netSrv.uniqIsa))
-      this
+      Behavior.same
     case ConnectionClosure(_) =>
       if (buffer.nonEmpty)
         Log.warn(
@@ -86,11 +86,11 @@ extends NodeProxy {
       }
       context.eventBus.publish(DisconnectEvent(sockCtx.remoteAddress(), remoteIdentity))
       terminate()
-      this
+      Behavior.same
     case InboundMessage(_, rawMsg) =>
       deserializeThenDeliver(rawMsg)
-      this
-    case _ => this
+      Behavior.same
+    case _ => Behavior.same
   }
 
   def serializeThenSend(msg: Serializable, optPromise: Option[Promise[Unit]] = None): Unit =

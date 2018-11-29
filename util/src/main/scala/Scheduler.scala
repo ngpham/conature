@@ -17,6 +17,7 @@ trait Scheduler {
   // This limits the usage a bit (i.e. test with failed assertion will not propagate),
   // but it is not critical for now.
   // FixMe: make the scheduler fully async with a task queue and a respawnable thread.
+  // Or simply use the one-thread pool.
   def exceptionHandler: Throwable => Unit
 
   // Java API
@@ -27,7 +28,8 @@ trait Scheduler {
     schedule(new FiniteDuration(delay, timeUnit), recurrent){ f.run() }
 }
 
-// Singlethreaded
+// Singlethreaded, non-hierarchical
+// Varghese, George, and Tony Lauck. "Hashed and hierarchical timing wheels"
 class HashedWheelScheduler (
     wheelSizeInBits: Int = 8,
     tickDuration: FiniteDuration = 100.millisecond,
