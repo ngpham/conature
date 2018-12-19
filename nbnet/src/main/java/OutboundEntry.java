@@ -2,9 +2,11 @@
 package np.conature.nbnet;
 
 import java.util.function.Consumer;
+import np.conature.util.JMisc;
 
 class OutboundEntry {
-  static Consumer<WriteComplete> EmptyOnComplete = (x) -> {};
+  @SuppressWarnings("unchecked")
+  static Consumer<WriteComplete> EmptyOnComplete = (Consumer<WriteComplete>) JMisc.EmptyFunc;
 
   protected byte[] toSend;
   protected Consumer<WriteComplete> onComplete;

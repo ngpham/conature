@@ -3,60 +3,77 @@ package np.conature.actor
 import java.util.function.Consumer
 import java.util.concurrent.RejectedExecutionException
 import scala.util.control.NonFatal
+import scala.concurrent.Future
+import scala.annotation.unchecked.uncheckedVariance
 import scala.concurrent.duration.{ Duration, FiniteDuration }
-import np.conature.util.{ ConQueue, MpscQueue, Cancellable, Log }
+import np.conature.util.{ ConQueue, MpscQueue, Cancellable, Log, Misc }
 
-trait Actor[-A] {
-  def !(message: A): Unit
+trait Actor[-A, +R] {
+  def !(message: A): Unit = send(message, Actor.empty)
 
-  def terminate(): Unit
+  private[actor] def send(message: A, repTo: Actor[Option[R], Any]): Unit
 
-  @inline def isTerminated: Boolean
-  @inline def isActive: Boolean
+  // Safety: if actor is terminated, Future should fail fast
+  def ?(message: A, timeout: Duration = Duration.Inf): Future[R]
+
+  def terminate(): Unit = ()
+
+  @inline def isTerminated: Boolean = true
+  @inline def isActive: Boolean = false
+}
+
+class NonAskableException(msg: String) extends Exception(msg: String) {}
+
+case class State[-A, +R](behavior: Behavior[A, R], reply: Option[R])
+
+object State {
+  val trivial = State[Any, Nothing](Behavior.same, None)
 }
 
 object Behavior {
-  val nop = new Runnable { def run = () }
-
-  val empty = new Behavior[Any] {
-    def apply(x: Any): Behavior[Any] = {
-      Log.info(Actor.logger, "Behavior.empty received: {0}", x)
-      this
+  val empty = new Behavior[Any, Nothing] {
+    def receive(x: Any): State[Any, Nothing] = {
+      // Since ask() is now safe, we should not litter the logging of message sent to
+      // terminated actor.
+      // FIXME: Make this configurable.
+      // Log.info(Actor.logger, "Behavior.empty received: {0}", x)
+      State.trivial
     }
   }
 
-  val same = new Behavior[Any] {
-    def apply(x: Any): Behavior[Any] = {
+  val same: Behavior[Any, Nothing] = new Behavior[Any, Nothing] {
+    def receive(x: Any): State[Any, Nothing] = {
       Log.info(Actor.logger, "Behavior.same should NOT be invoked. Unhandled message: {0}", x)
-      this
+      State(same, None)
     }
   }
 }
 
-trait Behavior[-T] extends Function1[T, Behavior[T]] {
-  private[this] var inner: ActorImplementation[T] = null
+trait Behavior[-A, +R] {
+  def receive(message: A): State[A, R]
+
+  private[this] var inner: ActorImplementation[A, R] = null
 
   // timeout is set/modified during Behavior construct, or during message processing,
   // thus is safe.
-  private[actor] var timeoutAction: Runnable = Behavior.nop
+  private[actor] var timeoutAction: () => Unit = Misc.Nop
   private[actor] var timeoutDuration: Duration = Duration.Undefined
 
   private[actor]
-  def updateSelf(a: ActorImplementation[T @annotation.unchecked.uncheckedVariance]): Unit =
+  def updateSelf(a: ActorImplementation[A @uncheckedVariance, R @uncheckedVariance]): Unit =
     inner = a
 
-  def selfref = inner.asInstanceOf[Actor[T]]
+  def selfref: Actor[A, R] = inner
   def context = inner.context
-  def terminate(): Unit = inner.terminate()
 
   def setTimeout(duration: Duration)(callback: => Unit) = {
-    if (timeoutAction ne Behavior.nop) inner.cancelTimeout()
+    if (timeoutAction ne Misc.Nop) inner.cancelTimeout()
     timeoutDuration = duration
-    timeoutAction = new Runnable { def run = callback }
+    timeoutAction = () => callback
   }
   def removeTimeout(): Unit = {
     disableTimeout()
-    timeoutAction = Behavior.nop
+    timeoutAction = Misc.Nop
   }
   def disableTimeout(): Unit = {
     inner.cancelTimeout()
@@ -65,25 +82,33 @@ trait Behavior[-T] extends Function1[T, Behavior[T]] {
   def enableTimeout(duration: FiniteDuration): Unit = { timeoutDuration = duration }
 }
 
-private[actor] final class ActorImplementation[-A] private
-    (private[this] var behavior: Behavior[A], val onError: Throwable => Behavior[A])
-    (val context: ActorContext)
-extends JActor with Actor[A] { actorA =>
+private[actor] case class Mail[A, R](message: A, repTo: Actor[Option[R], Any])
 
-  private[this] val mailbox: ConQueue[A] = new MpscQueue[A]()
+private[actor] final class ActorImplementation[-A, +R] private
+    (private[this] var behavior: Behavior[A, R], val onError: Throwable => Behavior[A, R])
+    (val context: ActorContext)
+extends JActor with Actor[A, R] { actorAR =>
+
+  private[this] val mailbox: ConQueue[Mail[A, R]] = new MpscQueue[Mail[A, R]]()
   private[this] var scheduledTimeout: Cancellable = null
 
-  def !(a: A): Unit = { mailbox.offer(a); trySchedule() }
+  override private[actor] def send(message: A, repTo: Actor[Option[R], Any]): Unit = {
+    mailbox.offer(Mail(message, repTo))
+    trySchedule()
+  }
 
-  def terminate(): Unit = if (tryTerminate()) {
+  def ?(message: A, timeout: Duration = Duration.Inf): Future[R] =
+    context.ask(actorAR, message, timeout)
+
+  override def terminate(): Unit = if (tryTerminate()) {
     if (unblock()) {
       behavior = Behavior.empty
       schedule()
     }
   }
 
-  def isTerminated: Boolean = terminated == 1
-  def isActive: Boolean = terminated == 0
+  @inline override def isTerminated: Boolean = terminated == 1
+  @inline override def isActive: Boolean = terminated == 0
 
   def cancelTimeout(): Unit = if (scheduledTimeout ne null) {
     scheduledTimeout.cancel()
@@ -98,17 +123,17 @@ extends JActor with Actor[A] { actorA =>
       context.strategy.execute(act)
     } catch {
       case e: RejectedExecutionException =>
-        Log.info(Actor.logger, "Failed to schedule actor {0}, error {1}", actorA, e)
+        Log.info(Actor.logger, "Failed to schedule actor {0}, error {1}", actorAR, e)
     }
   }
 
   private def scheduleTimeout(): Unit = {
-    if ((behavior.timeoutDuration.isFinite) && actorA.isActive && unblock()) {
+    if ((behavior.timeoutDuration.isFinite) && actorAR.isActive && unblock()) {
       val _fd = behavior.timeoutDuration.asInstanceOf[FiniteDuration]
 
       scheduledTimeout = context.scheduler.schedule(_fd) {
-        if (actorA.isActive && unblock()) {
-          behavior.timeoutAction.run()
+        if (actorAR.isActive && unblock()) {
+          behavior.timeoutAction()
           suspend()
           if (mailbox.isEmpty) scheduleTimeout()
           else trySchedule()
@@ -120,23 +145,23 @@ extends JActor with Actor[A] { actorA =>
     }
   }
 
-  private[this] val mboxAct = new Consumer[A] {
-    def accept(a: A): Unit = {
-      val b = try {
-        behavior(a)
-      } catch {
-        case ex: Throwable => onError(ex)
-      }
+  private[this] val mboxAct: Consumer[Mail[A, R]] = (mail: Mail[A, R]) => {
+    val state = try {
+      behavior.receive(mail.message)
+    } catch {
+      case ex: Throwable => State(onError(ex), None)
+    }
 
-      if (isTerminated) {
-        stayTerminated()
-      } else if (b eq Behavior.empty) {
-        terminate()
-      } else if (b ne Behavior.same) {
-        cancelTimeout()
-        behavior = b
-        b.updateSelf(actorA)
-      }
+    mail.repTo ! state.reply
+
+    if (isTerminated) {
+      stayTerminated()
+    } else if (state.behavior eq Behavior.empty) {
+      terminate()
+    } else if ((state.behavior ne Behavior.same) && (state.behavior ne behavior)) {
+      cancelTimeout()
+      state.behavior.updateSelf(actorAR)
+      behavior = state.behavior
     }
   }
 
@@ -160,9 +185,9 @@ extends JActor with Actor[A] { actorA =>
 }
 
 private[actor] object ActorImplementation {
-  def apply[A]
-      (behavior: Behavior[A], onError: Throwable => Behavior[A])
-      (context: ActorContext): Actor[A] = {
+  def apply[A, R]
+      (behavior: Behavior[A, R], onError: Throwable => Behavior[A, R])
+      (context: ActorContext): Actor[A, R] = {
     val actor = new ActorImplementation(behavior, onError)(context)
     behavior.updateSelf(actor)
     actor.scheduleTimeout()
@@ -171,26 +196,25 @@ private[actor] object ActorImplementation {
 }
 
 object Actor {
-  def apply[A]
-      (behavior: Behavior[A], onError: Throwable => Behavior[A] = (_: Throwable) => Behavior.empty)
-      (context: ActorContext): Actor[A] =
+  private[actor] def apply[A, R]
+      (behavior: Behavior[A, R], onError: Throwable => Behavior[A, R])
+      (context: ActorContext): Actor[A, R] =
     ActorImplementation(behavior, onError)(context)
 
-  // Thin adapter for ADT message, will be obsolete when Union Type is available in Scala 3.
-  def contramap[A, B](a: Actor[A])(f: B => A): Actor[B] =
-    new Actor[B] {
-      def !(msg: B): Unit = a ! f(msg)
-      def terminate() = a.terminate()
-      @inline def isTerminated = a.isTerminated
-      @inline def isActive = a.isActive
-    }
+  val empty: Actor[Any, Nothing] = new Actor[Any, Nothing] {
+    private[actor]
+    def send(message: Any, repTo: Actor[Option[Nothing], Any]) = ()
 
-  @deprecated("This function should not be used for Actor error handling.")
-  val rethrow: Throwable => Unit = e => e match {
-    case _: InterruptedException => throw e
-    case NonFatal(e) => throw e
-    case _: Throwable => throw e
+    def ?(message: Any, timeout: Duration = Duration.Inf): Future[Nothing] =
+      Future.failed(new NonAskableException("Actor.empty is not questionable!"))
   }
 
-  val logger = Log.logger(classOf[Actor[_]].getName)
+  // swallow exception, then terminate the actor
+  val onErrorTerminate: Throwable => Behavior[Any, Nothing] = _  match {
+    case _: InterruptedException => Behavior.empty
+    case NonFatal(_) => Behavior.empty
+    case _: Throwable => Behavior.empty
+  }
+
+  val logger = Log.logger(classOf[Actor[_, _]].getName)
 }

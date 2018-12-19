@@ -20,13 +20,12 @@ import np.conature.util.ConQueue;
 import np.conature.util.MpscQueue;
 import np.conature.util.Scheduler;
 import np.conature.util.HashedWheelScheduler;
+import np.conature.util.JMisc;
 
 public class NbTransport {
   private static final int IsActive = 0;
   private static final int IsShutdown = 1;
   private static final int IsStopped = 2;
-
-  protected static Consumer<? extends Object> EmptyHandler = (x) -> {};
 
   private static final Logger logger = Logger.getLogger(NbTransport.class.getName());
 
@@ -44,19 +43,19 @@ public class NbTransport {
 
   @SuppressWarnings("unchecked")
   protected Consumer<ContextualRawMessage> inboundMessageHandler =
-    (Consumer<ContextualRawMessage>) EmptyHandler;
+    (Consumer<ContextualRawMessage>) JMisc.EmptyFunc;
 
   @SuppressWarnings("unchecked")
   protected Consumer<SocketContext> onConnectionEstablishedHandler =
-    (Consumer<SocketContext>) EmptyHandler;
+    (Consumer<SocketContext>) JMisc.EmptyFunc;
 
   @SuppressWarnings("unchecked")
   protected Consumer<InetSocketAddress> onConnectionAttemptFailureHandler =
-    (Consumer<InetSocketAddress>) EmptyHandler;
+    (Consumer<InetSocketAddress>) JMisc.EmptyFunc;
 
   @SuppressWarnings("unchecked")
   protected Consumer<SocketContext> onConnectionCloseHandler =
-    (Consumer<SocketContext>) EmptyHandler;
+    (Consumer<SocketContext>) JMisc.EmptyFunc;
 
   public NbTransport(int port) {
     this(port, HashedWheelScheduler.apply());

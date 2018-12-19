@@ -1,9 +1,9 @@
 package np.conature.actor
 
-import java.util.concurrent.{ ExecutorService, ForkJoinPool }
+import java.util.concurrent.{ ExecutorService, ForkJoinPool, TimeoutException }
 import scala.collection.{ mutable => mc }
 import scala.concurrent.duration.Duration
-import scala.concurrent.{ Future, ExecutionContext }
+import scala.concurrent.{ Future, Promise, ExecutionContext }
 import scala.language.dynamics
 import scala.reflect.runtime.universe.{ TypeTag, typeOf, Type }
 import np.conature.util.{ EventBus, Scheduler, HashedWheelScheduler, Log }
@@ -17,28 +17,41 @@ trait ActorContext extends Dynamic { context =>
   def executionPool: ExecutorService
   def strategy: ExecutionContext
   def scheduler: Scheduler
-  def eventBus: EventBus[Actor]
+  def eventBus: EventBus[({type F[-X] = Actor[X, Any]})#F]
 
   private val registry = new mc.HashMap[String, (Any, Type)]
 
-  def ask[A, B](
-      actor: Actor[A],
-      message: Actor[B] => A,
-      timeout: Duration = Duration.Inf): Future[B]
-
-  def spawn[A](
-      behavior: Behavior[A],
-      onError: Throwable => Behavior[A] = (_: Throwable) => Behavior.empty): Actor[A] =
+  def spawn[A, R](
+      behavior: Behavior[A, R],
+      onError: Throwable => Behavior[A, R] = Actor.onErrorTerminate): Actor[A, R] =
     Actor(behavior, onError)(context)
 
-  def spawn[A](f: A => Unit): Actor[A] =
+  def spawn[A](f: A => Unit): Actor[A, Nothing] =
     spawn(
-      new Behavior[A] {
-        def apply(a: A) = {
-          f(a)
-          this
+      new Behavior[A, Nothing] {
+        def receive(msg: A) = {
+          f(msg)
+          State.trivial
         }
       })
+
+  def ask[A, B, X >: A](
+      actor: Actor[X, B],
+      message: A,
+      timeout: Duration = Duration.Inf): Future[B]
+
+  // Thin adapter: Actor[A, X] is adapted as Actor[B, Y] - which just performs forwarding.
+  // The use case is rare, i.e. for a given sealed/final message type A, if we have to extend
+  // or combine with others type: we create ADT i.e. Sum type B. See systest.TypedChat
+  //
+  // A better solution is to favor composition over interface adapting.
+  // Or: Union Type, in Scala 3.
+  //
+  // A -----> X
+  // ↑        |
+  // |        ↓
+  // B -----> Y
+  def liftextend[A, X, B, Y](a: Actor[A, X])(f: B => A)(g: X => Y): Actor[B, Y]
 
   def selectDynamic[T: TypeTag](name: String): T = registry.get(name) match {
     case None => throw new ClassNotFoundException("Cannot find a matched registered instance")
@@ -67,8 +80,68 @@ trait ActorContext extends Dynamic { context =>
   }
 }
 
+private[actor] trait ActorContextPattern { context: ActorContext =>
+  override def ask[A, B, X >: A](
+      actor: Actor[X, B],
+      message: A,
+      timeout: Duration = Duration.Inf): Future[B] = {
+
+    val prm = Promise[B]()
+    val shortLife = context.spawn(new Behavior[Option[B], Nothing] {
+      def receive(msg: Option[B]) = {
+        msg match {
+          case Some(m) => prm trySuccess m
+          case None =>
+            prm tryFailure (
+              new Exception("ask() failed, likely due to terminated askee."))
+        }
+        selfref.terminate()
+        State.trivial
+      }
+
+      setTimeout(timeout) {
+        prm tryFailure (
+          new TimeoutException(s"ask() failed to received a reply within $timeout"))
+        selfref.terminate()
+      }
+    })
+
+    actor.send(message, shortLife)
+    prm.future
+  }
+
+  override def liftextend[A, X, B, Y](a: Actor[A, X])(f: B => A)(g: X => Y): Actor[B, Y] =
+    new Actor[B, Y] {
+      override private[actor]
+      def send(message: B, repTo: Actor[Option[Y], Any]): Unit = {
+        // Valid, but not efficient, and not needed, since we handle ask() separately.
+        //
+        // val forwarder = new Actor[Option[X], Any] {
+        //   private[actor]
+        //   def send(msg: Option[X], dontcare: Actor[Option[Any], Any]): Unit = {
+        //     repTo ! (msg map (g(_)))
+        //   }
+        //   def ?(msg: Option[X], timeout: Duration = Duration.Inf): Future[Any] =
+        //     Future.failed[Any](new NonAskableException("The forwarder actor is not questionable!"))
+        // }
+        // a.send(f(message), forwarder)
+
+        a.send(f(message), Actor.empty)
+      }
+
+      def ?(message: B, timeout: Duration = Duration.Inf): Future[Y] = {
+        (a ? f(message)).map(g(_))(context.strategy)
+      }
+
+      @inline override def terminate() = a.terminate()
+
+      @inline override def isTerminated = a.isTerminated
+      @inline override def isActive = a.isActive
+    }
+}
+
 object ActorContext {
-  def createDefault(): ActorContext = new ActorContext {
+  def createDefault(): ActorContext = new ActorContext with ActorContextPattern { ctx =>
     val executionPool = new ForkJoinPool()
     val strategy = ExecutionContext.fromExecutorService(executionPool)
     val eventBus = new EventBusActor()
@@ -77,14 +150,6 @@ object ActorContext {
       exceptionHandler =
         (t: Throwable) => Log.warn(ActorContext.logger, "Exception in timed task", t)
     )
-
-    private val broker = new Broker(this)
-
-    def ask[A, B](
-        actor: Actor[A],
-        message: Actor[B] => A,
-        timeout: Duration = Duration.Inf): Future[B] =
-      broker.ask(actor, message, timeout)
   }
 
   val reuseThreadStrategy = new ExecutionContext {

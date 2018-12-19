@@ -26,6 +26,7 @@ trait EventBus[F[-_]] {
     val ss = reg.getOrElseUpdate(
       typeOf[T],
       MSortedSet.empty[F[_]](EventBus.identityOrdering.asInstanceOf[Ordering[F[_]]]))
+
     ss += handler
     ()
   }
@@ -38,16 +39,21 @@ trait EventBus[F[-_]] {
     ()
   }
 
+  // warning: racing with (un)subscribe. OK for most use cases.
   def publish[T : TypeTag](event: T): Unit = {
-    var unhandled = true
-    for ((k, v) <- reg)
-      if (typeOf[T] <:< k)
+    val matching = reg.filter({
+      case (k, v) =>
+        typeOf[T] <:< k && v.nonEmpty
+    })
+
+    if (matching.nonEmpty) {
+      for ((_, v) <- matching)
         for (h <- v) {
-          unhandled = false
           callback(h.asInstanceOf[F[T]], event)
         }
-    if (unhandled && !event.isInstanceOf[DeadEvent])
+    } else {
       publish(DeadEvent(event))
+    }
   }
 
   def callback[T : TypeTag](handler: F[T], event: T): Unit

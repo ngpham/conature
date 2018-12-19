@@ -4,6 +4,7 @@ package np.conature.nbnet;
 import java.util.function.Consumer;
 import np.conature.util.Scheduler;
 import np.conature.util.Cancellable;
+import np.conature.util.JMisc;
 
 public class ChannelIdleTimeout {
   protected Cancellable readIdleTimeout = null;
@@ -16,7 +17,7 @@ public class ChannelIdleTimeout {
 
   @SuppressWarnings("unchecked")
   private Consumer<ChannelIdleEvent> callback =
-    (Consumer<ChannelIdleEvent>) NbTransport.EmptyHandler;
+    (Consumer<ChannelIdleEvent>) JMisc.EmptyFunc;
 
   public void reScheduleReadIdleTimeout() {
     if (readIdleTimeout != null) readIdleTimeout.cancel();
