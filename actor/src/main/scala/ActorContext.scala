@@ -112,7 +112,7 @@ private[actor] trait ActorContextPattern { context: ActorContext =>
 
   override def liftextend[A, X, B, Y](a: Actor[A, X])(f: B => A)(g: X => Y): Actor[B, Y] =
     new Actor[B, Y] {
-      override private[actor]
+      private[conature]
       def send(message: B, repTo: Actor[Option[Y], Any]): Unit = {
         // Valid, but not efficient, and not needed, since we handle ask() separately.
         //

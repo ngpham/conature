@@ -6,13 +6,13 @@ import java.util.function.Consumer
 import scala.collection.mutable.{ Buffer }
 import scala.concurrent.Promise
 import scala.util.{ Success, Failure }
-import np.conature.actor.{ Behavior }
+import np.conature.actor.{ Behavior, State }
 import np.conature.nbnet.{ SocketContext, WriteComplete }
 import np.conature.util.Log
 import messages._
 import events.{ DisconnectEvent }
 
-private[remote] sealed trait NodeProxy extends Behavior[CommandEventProtocol] {
+private[remote] sealed trait NodeProxy extends Behavior[CommandEventProtocol, Nothing] {
   def netSrv: NetworkService
   def remoteIdentity: Option[InetSocketAddress]
   def buffer: Buffer[(DataMessage, Option[Promise[Unit]])]
@@ -25,21 +25,21 @@ private[remote] class PendingProxy(
 extends NodeProxy {
   require(remoteIdentity.nonEmpty)
 
-  def apply(cep: CommandEventProtocol): Behavior[CommandEventProtocol] = cep match {
+  def receive(cep: CommandEventProtocol): State[CommandEventProtocol, Nothing] = cep match {
     case SendMessage(dMsg, _, optPromise) =>
       buffer += (dMsg -> optPromise)
-      Behavior.same
+      State.trivial
     case Disconnect(node) =>
       Log.warn(
         NetworkService.logger,
         "{0} is not connected, ignore Disconnect command. This must not happen.",
         node)
-      Behavior.same
+      State.trivial
     case ConnectionAcceptance(sctx) =>
       val ap = new ActiveProxy(netSrv, sctx, buffer, remoteIdentity)
       if (NetworkService.Config.enableDuplexConnection) selfref ! AdviceReuseConnection
       if (buffer.nonEmpty) selfref ! Flush
-      ap
+      State(ap, None)
     case ConnectionAttemptFailure(_) =>
       Log.warn(
         NetworkService.logger,
@@ -48,9 +48,9 @@ extends NodeProxy {
       buffer.foreach { case (_, optPromise) =>
         optPromise map (p => p failure new Exception())
       }
-      terminate()
-      Behavior.same
-    case _ => Behavior.same
+      selfref.terminate()
+      State.trivial
+    case _ => State.trivial
   }
 }
 
@@ -61,20 +61,20 @@ private[remote] class ActiveProxy(
     val remoteIdentity: Option[InetSocketAddress] = None)
 extends NodeProxy {
 
-  def apply(cep: CommandEventProtocol): Behavior[CommandEventProtocol] = cep match {
+  def receive(cep: CommandEventProtocol): State[CommandEventProtocol, Nothing] = cep match {
     case SendMessage(dMsg, _, optPromise) =>
       serializeThenSend(dMsg, optPromise)
-      Behavior.same
+      State.trivial
     case Flush =>
       buffer.foreach(t => serializeThenSend(t._1, t._2))
       buffer.clear()
-      Behavior.same
+      State.trivial
     case Disconnect(_) =>
       sendNotificationThenDisconnect()
-      Behavior.same
+      State.trivial
     case AdviceReuseConnection =>
       serializeThenSend(ReuseConnectionMessage(netSrv.uniqIsa))
-      Behavior.same
+      State.trivial
     case ConnectionClosure(_) =>
       if (buffer.nonEmpty)
         Log.warn(
@@ -85,12 +85,12 @@ extends NodeProxy {
         optPromise map (p => p failure new Exception())
       }
       context.eventBus.publish(DisconnectEvent(sockCtx.remoteAddress(), remoteIdentity))
-      terminate()
-      Behavior.same
+      selfref.terminate()
+      State.trivial
     case InboundMessage(_, rawMsg) =>
       deserializeThenDeliver(rawMsg)
-      Behavior.same
-    case _ => Behavior.same
+      State.trivial
+    case _ => State.trivial
   }
 
   def serializeThenSend(msg: Serializable, optPromise: Option[Promise[Unit]] = None): Unit =
@@ -121,11 +121,12 @@ extends NodeProxy {
   def deserializeThenDeliver(rawMsg: Array[Byte]): Unit =
     netSrv.serializer.fromBinary(rawMsg) match {
       case Success(dMsg: DataMessage) =>
-        dMsg.recipient.fold(
-          netSrv.clientSeverModeMessageHandler(ContextualData(sockCtx, dMsg.data))
-        )(actorName => {
-          netSrv.lookupLocal(actorName).foreach(_ ! dMsg.data)
-        })
+        dMsg.recipient match {
+          case None =>
+            netSrv.clientSeverModeMessageHandler(ContextualData(sockCtx, dMsg.data))
+          case Some(actorName) =>
+            netSrv.lookupLocal(actorName).foreach(_ ! dMsg.data)
+        }
       case Success(ReuseConnectionMessage(identity)) =>
         sockCtx.remoteIdentity(identity)
         netSrv.remoteMaster ! UpdateRemoteIdentity(identity, sockCtx.remoteAddress)

@@ -14,7 +14,7 @@ import np.conature.systest.chat._
 object ChatMultiJvmNode1 {
   def main(args: Array[String]): Unit =  {
     np.conature.nbnet.Config.shortReadIdle = 1
-    Server.main(Array("9999", "2"))
+    Server.main(Array("9999", "3"))
   }
 }
 
@@ -27,17 +27,20 @@ class ClientController(port: Int, numMsg: Int) {
     val latchMsg = new CountDownLatch(1)
     val latchSys = new CountDownLatch(1)
     var count = 0
+    var countFromOthers = 0
     val context = ActorContext.createDefault()
-    context.register("netsrv")(NetworkService(context))
+    val nsr = NetworkService(context)
+    context.register("netsrv")(nsr)
     context.start()
 
-    val srv = context.netsrv[NetworkService].locate[Message](
-      s"cnt://chatservice@localhost:9999").get
+    val srv = nsr.locate[Message](
+        s"cnt://chatservice@localhost:9999").get
 
-    val endpoint = context.netsrv[NetworkService].locate[Message](
-      s"cnt://client@localhost:$port").get
+    val endpoint = nsr.locate[Message](
+        s"cnt://client@localhost:$port").get
 
-    val client: Actor[Any] = context.spawn(new ClientOffline(endpoint)(_ => {
+    val client = context.spawn(new ClientOffline(endpoint)((msg: Text) => {
+      if (msg.sender != endpoint) countFromOthers += 1
       count += 1
       if (count == numMsg) latchMsg.countDown()
     }))
@@ -46,13 +49,16 @@ class ClientController(port: Int, numMsg: Int) {
       (_: DisconnectEvent) => latchSys.countDown()
     ))
 
-    context.netsrv[NetworkService].register("client", client)
+    val lifted: Actor[Message, Future[LoginResult]] =
+      context.liftextend(client)((m: Message) => ServerMsg(m))(identity)
+
+    nsr.bind(endpoint, lifted)
 
     @volatile var loggedin = false
 
     while (!loggedin)
       try {
-        val fut: Future[LoginResult] = context.ask(client, DoLogin(srv, _))
+        val fut: Future[LoginResult] = (client ? ClientCmd(DoLogin(srv))).flatten
         Await.result(fut, Duration("1s")) match {
           case LoginSuccess(_) => loggedin = true
         }
@@ -60,11 +66,11 @@ class ClientController(port: Int, numMsg: Int) {
         case _: java.util.concurrent.TimeoutException => ()
       }
 
-    for (_ <- 1 to numMsg) client ! SendMessage("something")
+    for (_ <- 1 to numMsg) client ! ClientCmd(SendMessage("something"))
 
     latchMsg.await()
-    context.netsrv[NetworkService].disconnect(new InetSocketAddress("localhost", 9999))
-    println(s"Chat client completed $count messages.")
+    nsr.disconnect(new InetSocketAddress("localhost", 9999))
+    println(s"**** Chat client completed $count messages, $countFromOthers are from friends.")
     latchSys.await()
     context.stop()
   }
@@ -80,6 +86,13 @@ object ChatMultiJvmNode2 {
 object ChatMultiJvmNode3 {
   def main(args: Array[String]): Unit =  {
     val cc = new ClientController(8888, 1024)
+    cc.run()
+  }
+}
+
+object ChatMultiJvmNode4 {
+  def main(args: Array[String]): Unit =  {
+    val cc = new ClientController(10000, 1024)
     cc.run()
   }
 }

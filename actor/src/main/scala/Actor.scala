@@ -11,7 +11,7 @@ import np.conature.util.{ ConQueue, MpscQueue, Cancellable, Log, Misc }
 trait Actor[-A, +R] {
   def !(message: A): Unit = send(message, Actor.empty)
 
-  private[actor] def send(message: A, repTo: Actor[Option[R], Any]): Unit
+  private[conature] def send(message: A, repTo: Actor[Option[R], Any]): Unit
 
   // Safety: if actor is terminated, Future should fail fast
   def ?(message: A, timeout: Duration = Duration.Inf): Future[R]
@@ -24,6 +24,12 @@ trait Actor[-A, +R] {
 
 class NonAskableException(msg: String) extends Exception(msg: String) {}
 
+trait NonAskableActor[-A] extends Actor[A, Nothing] {
+  def ?(message: A, timeout: Duration = Duration.Inf): Future[Nothing] =
+    Future.failed[Nothing](
+      new NonAskableException(s"NonAskableActor $this is not questionable!"))
+}
+
 case class State[-A, +R](behavior: Behavior[A, R], reply: Option[R])
 
 object State {
@@ -33,7 +39,7 @@ object State {
 object Behavior {
   val empty = new Behavior[Any, Nothing] {
     def receive(x: Any): State[Any, Nothing] = {
-      // Since ask() is now safe, we should not litter the logging of message sent to
+      // Since ask() is safe, we should not litter the logging of message sent to
       // terminated actor.
       // FIXME: Make this configurable.
       // Log.info(Actor.logger, "Behavior.empty received: {0}", x)
@@ -92,7 +98,7 @@ extends JActor with Actor[A, R] { actorAR =>
   private[this] val mailbox: ConQueue[Mail[A, R]] = new MpscQueue[Mail[A, R]]()
   private[this] var scheduledTimeout: Cancellable = null
 
-  override private[actor] def send(message: A, repTo: Actor[Option[R], Any]): Unit = {
+  private[conature] def send(message: A, repTo: Actor[Option[R], Any]): Unit = {
     mailbox.offer(Mail(message, repTo))
     trySchedule()
   }
@@ -201,19 +207,19 @@ object Actor {
       (context: ActorContext): Actor[A, R] =
     ActorImplementation(behavior, onError)(context)
 
-  val empty: Actor[Any, Nothing] = new Actor[Any, Nothing] {
-    private[actor]
+  val empty: NonAskableActor[Any] = new NonAskableActor[Any] {
+    private[conature]
     def send(message: Any, repTo: Actor[Option[Nothing], Any]) = ()
 
-    def ?(message: Any, timeout: Duration = Duration.Inf): Future[Nothing] =
+    override def ?(message: Any, timeout: Duration = Duration.Inf): Future[Nothing] =
       Future.failed(new NonAskableException("Actor.empty is not questionable!"))
   }
 
-  // swallow exception, then terminate the actor
-  val onErrorTerminate: Throwable => Behavior[Any, Nothing] = _  match {
-    case _: InterruptedException => Behavior.empty
-    case NonFatal(_) => Behavior.empty
-    case _: Throwable => Behavior.empty
+  // Log the exception, then terminate the actor
+  val onErrorTerminate: Throwable => Behavior[Any, Nothing] = e => e match {
+    case _: InterruptedException | NonFatal(_) | _: Throwable =>
+      Log.error(logger, "Exception in actor behavior:", e)
+      Behavior.empty
   }
 
   val logger = Log.logger(classOf[Actor[_, _]].getName)

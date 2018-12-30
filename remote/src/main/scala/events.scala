@@ -7,4 +7,3 @@ import java.net.InetSocketAddress
 case class DisconnectEvent(
   remoteAddress: InetSocketAddress,
   remoteIdentity: Option[InetSocketAddress])
-

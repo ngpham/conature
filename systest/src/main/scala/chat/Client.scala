@@ -2,50 +2,58 @@ package np.conature.systest.chat
 
 import java.util.concurrent.CountDownLatch
 import java.net.InetSocketAddress
-import scala.concurrent.{ Await, Future }
+import scala.concurrent.{ Await, Future, Promise }
 import scala.concurrent.duration.{ Duration }
 import scala.io.StdIn
-import np.conature.actor.{ ActorContext, Behavior, Actor }
+import np.conature.actor.{ ActorContext, Behavior, Actor, State, NonAskableActor }
 import np.conature.remote.{ NetworkService }
 import np.conature.remote.events.DisconnectEvent
 
-trait ClientBehavior extends Behavior[Any]
+sealed trait UnionMsg
+case class ServerMsg(msg: Message) extends UnionMsg
+case class ClientCmd(msg: ClientCommand) extends UnionMsg
 
-class ClientOffline(val myRemoteRef: Actor[Message])(val hook: Text => Unit)
+trait ClientBehavior extends Behavior[UnionMsg, Future[LoginResult]]
+
+class ClientOffline(val myRemoteRef: NonAskableActor[Message])(val hook: Text => Unit)
 extends ClientBehavior {
   var retries = 0
-  var server: Option[Actor[Message]] = None
-  var notifyee: Option[Actor[LoginResult]] = None
+  var server: Option[NonAskableActor[Message]] = None
+  var prm: Promise[LoginResult] = Promise.successful(LoginFailure)
 
-  def apply(msg: Any): ClientBehavior = msg match {
-    case DoLogin(srv, repTo) =>
+  def receive(msg: UnionMsg) = msg match {
+    case ClientCmd(DoLogin(srv)) =>
       srv ! Login(myRemoteRef)
       server = Some(srv)
       retries += 1
-      notifyee = Some(repTo)
-      this
-    case LoginGranted(ssid) =>
-      notifyee map (_ ! LoginSuccess(ssid))
-      new ClientActive(myRemoteRef, server.get, ssid)(hook)
-    case _ => this
+      prm = Promise[LoginResult]()
+      State(Behavior.same, Some(prm.future))
+    case ServerMsg(LoginGranted(ssid)) =>
+      prm.trySuccess(LoginSuccess(ssid))
+      State(new ClientActive(myRemoteRef, server.get, ssid)(hook), None)
+    case _ =>
+      State.trivial
   }
 }
 
 class ClientActive
-  (val myRemoteRef: Actor[Message], val server: Actor[Message], val ssid: String)
+  (val myRemoteRef: NonAskableActor[Message],
+   val server: NonAskableActor[Message],
+   val ssid: String)
   (val hook: Text => Unit)
 extends ClientBehavior {
-  def apply(msg: Any): ClientBehavior = msg match {
-    case SendMessage(payload) =>
+  def receive(msg: UnionMsg) = msg match {
+    case ClientCmd(SendMessage(payload)) =>
       server ! BroadCast(ssid, payload)
-      this
-    case DoLogout =>
+      State.trivial
+    case ClientCmd(DoLogout) =>
       server ! Logout(ssid)
-      new ClientOffline(myRemoteRef: Actor[Message])(hook)
-    case m @ Text(_, _) =>
+      State(new ClientOffline(myRemoteRef: NonAskableActor[Message])(hook), None)
+    case ServerMsg(m @ Text(_, _)) =>
       hook(m)
-      this
-    case _ => this
+      State.trivial
+    case _ =>
+      State.trivial
   }
 }
 
@@ -62,19 +70,24 @@ object Client {
 
     val latch = new CountDownLatch(1)
     val context = ActorContext.createDefault()
-    context.register("netsrv")(NetworkService(context))
+    val nsr = NetworkService(context)
+    context.register("netsrv")(nsr)
     context.start()
 
-    val srv = context.netsrv[NetworkService].locate[Message](
-                s"cnt://chatservice@localhost:${args(1)}").get
+    val srv = nsr.locate[Message](
+        s"cnt://chatservice@localhost:${args(1)}").get
 
-    val endpoint = context.netsrv[NetworkService].locate[Message](
-                s"cnt://client@localhost:${args(0)}").get
+    val endpoint = nsr.locate[Message](
+        s"cnt://client@localhost:${args(0)}").get
 
     val client = context.spawn(new ClientOffline(endpoint)(text =>
       println(s"Receive from ${text.sender}: ${text.payload}")
     ))
-    context.netsrv[NetworkService].register("client", client)
+
+    val lifted: Actor[Message, Future[LoginResult]] =
+      context.liftextend(client)((m: Message) => ServerMsg(m))(identity)
+
+    nsr.bind(endpoint, lifted)
 
     context.eventBus.subscribe(context.spawn(
       (_: DisconnectEvent) => latch.countDown()
@@ -84,7 +97,7 @@ object Client {
     while ({line = StdIn.readLine(); line.nonEmpty}) {
       line match {
         case "login" =>
-          val fut: Future[LoginResult] = context.ask(client, DoLogin(srv, _))
+          val fut: Future[LoginResult] = (client ? ClientCmd(DoLogin(srv))).flatten
           try {
             Await.result(fut, Duration("1s")) match {
               case LoginSuccess(ssid) => println(s"Logged in with session: $ssid")
@@ -93,8 +106,8 @@ object Client {
             case _: java.util.concurrent.TimeoutException =>
               println("Failed to complete login within allowed time")
           }
-        case "logout" => client ! DoLogout
-        case a: String if a.nonEmpty => client ! SendMessage(a)
+        case "logout" => client ! ClientCmd(DoLogout)
+        case a: String if a.nonEmpty => client ! ClientCmd(SendMessage(a))
         case _ => ()
       }
     }

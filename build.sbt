@@ -14,8 +14,8 @@ lazy val commonSettings = Seq(
   publishTo := None
 )
 
-lazy val root = (project in file(".")).aggregate(util, actor, nbnet).
-  dependsOn(util, actor, nbnet). // for 'sbt console' to find packages
+lazy val root = (project in file(".")).aggregate(util, actor, nbnet, remote, systest).
+  dependsOn(util, actor, nbnet, remote, systest). // for 'sbt console' to find packages
   settings(name := "conature")
 
 lazy val util = (project in file("util")).
@@ -47,21 +47,21 @@ lazy val nbnet = (project in file("nbnet")).
     name := "nbnet"
   )
 
-// lazy val remote = (project in file("remote")).
-//   dependsOn(actor, nbnet).
-//   settings(
-//     commonSettings,
-//     name := "remote"
-//   )
+lazy val remote = (project in file("remote")).
+  dependsOn(actor, nbnet).
+  settings(
+    commonSettings,
+    name := "remote"
+  )
 
-// lazy val systest = (project in file("systest")).
-//   dependsOn(util, actor, nbnet, remote).
-//   settings(
-//     commonSettings,
-//     name := "systest",
-//     libraryDependencies ++= Seq(
-//       Dependencies.scalareflect,
-//       Dependencies.scalatest % Test)
-//   ).
-//   enablePlugins(MultiJvmPlugin).
-//   configs(MultiJvm)
+lazy val systest = (project in file("systest")).
+  dependsOn(util, actor, nbnet, remote).
+  settings(
+    commonSettings,
+    name := "systest",
+    libraryDependencies ++= Seq(
+      Dependencies.scalareflect,
+      Dependencies.scalatest % Test)
+  ).
+  enablePlugins(MultiJvmPlugin).
+  configs(MultiJvm)

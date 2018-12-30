@@ -20,8 +20,6 @@ case class ReuseConnectionMessage(identity: InetSocketAddress) extends ConatureM
 private[remote]
 case object DisconnectNotificationMessage extends ConatureMessage
 
-////
-
 private[remote]
 case class ContextualData(sockCtx: SocketContext, data: Serializable) extends ConatureMessage
 
@@ -45,4 +43,6 @@ private[remote] case class Disconnect(node: InetSocketAddress) extends Command
 private[remote] case class ConnectionAcceptance(sctx: SocketContext) extends Event
 private[remote] case class ConnectionAttemptFailure(isa: InetSocketAddress) extends Event
 private[remote] case class ConnectionClosure(sctx: SocketContext) extends Event
-private[remote] case class InboundMessage(sctx: SocketContext, rawMsg: Array[Byte]) extends Event
+
+private[remote] case class InboundMessage(sctx: SocketContext, rawMsg: Array[Byte])
+extends Event

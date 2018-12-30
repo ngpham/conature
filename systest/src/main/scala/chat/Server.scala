@@ -5,16 +5,17 @@ import java.util.UUID
 import scala.collection.{ mutable => mc }
 import scala.concurrent.duration.Duration
 
-import np.conature.actor.{ ActorContext, Behavior, Actor }
+import np.conature.actor.{ ActorContext, Behavior, State, NonAskableActor }
 import np.conature.remote.NetworkService
 import np.conature.remote.events.DisconnectEvent
 
-class ServerAct(val limit: Int, val address: Actor[Message]) extends Behavior[Message] {
+class ServerAct(val limit: Int, val address: NonAskableActor[Message])
+extends Behavior[Message, Nothing] {
   private var count = 0
-  private val ssidToClient: mc.Map[String, Actor[Message]] = mc.Map()
-  private val clientToSsid: mc.Map[Actor[Message], String] = mc.Map()
+  private val ssidToClient: mc.Map[String, NonAskableActor[Message]] = mc.Map()
+  private val clientToSsid: mc.Map[NonAskableActor[Message], String] = mc.Map()
 
-  def apply(msg: Message): Behavior[Message] = msg match {
+  def receive(msg: Message): State[Message, Nothing] = msg match {
     case Login(user) =>
       if (!clientToSsid.contains(user)) {
         val ssid = UUID.randomUUID().toString
@@ -22,24 +23,24 @@ class ServerAct(val limit: Int, val address: Actor[Message]) extends Behavior[Me
         ssidToClient += (ssid -> user)
         user ! LoginGranted(ssid)
       }
-      this
+      State.trivial
     case Logout(ssid: String) =>
       ssidToClient.get(ssid) map { user =>
         clientToSsid -= user
         ssidToClient -= ssid
       }
-      this
+      State.trivial
     case BroadCast(ssid: String, payload: String) =>
       ssidToClient.get(ssid) map { sender =>
         val txt = Text(sender, payload)
         for (v <- ssidToClient.values) v ! txt
       }
-      this
+      State.trivial
     case SessionEnd(cb) =>
       count += 1
       if (count == limit) { context.stop(); cb() }
-      this
-    case _ => this
+      State.trivial
+    case _ => State.trivial
   }
 
   setTimeout(Duration("1s"))({
@@ -58,20 +59,22 @@ object Server {
     NetworkService.Config.bindPort = args(0).toInt
     val latch = new CountDownLatch(1)
     val context = ActorContext.createDefault()
+    val netsrv = NetworkService(context)
 
-    context.register("netsrv")(NetworkService(context))
+    context.register("netsrv")(netsrv)
     context.start()
 
-    val address = context.netsrv[NetworkService].locate[Message](
+    val address = netsrv.locate[Message](
       s"cnt://chatservice@localhost:${args(0)}").get
 
     val srv = context.spawn(new ServerAct(args(1).toInt, address))
+    netsrv.bind(address, srv)
 
-    context.eventBus.subscribe(Actor.contramap(srv){
-      _: DisconnectEvent => SessionEnd(() => latch.countDown())
-    })
-
-    context.netsrv[NetworkService].register("chatservice", srv)
+    context.eventBus.subscribe(
+      context.liftextend(srv)
+        ((_: DisconnectEvent) => SessionEnd(() => latch.countDown()))
+        (identity)
+    )
 
     latch.await()
   }

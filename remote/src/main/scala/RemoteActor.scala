@@ -1,7 +1,7 @@
 
 package np.conature.remote
 
-import np.conature.actor.Actor
+import np.conature.actor.{ Actor, NonAskableActor }
 
 import java.net.URI
 import java.net.InetSocketAddress
@@ -9,24 +9,27 @@ import java.io.ObjectStreamException
 import scala.util.Try
 
 @SerialVersionUID(1L)
-private[remote] final class RemoteActor[-A <: Serializable] (
+final class RemoteActor[-A <: Serializable](
     @transient val node: InetSocketAddress,
     @transient val name: String,
     val address: String,
-    @transient val netSrv: NetworkService)
-extends Actor[A] with Serializable {
+    @transient val netSrv: NetworkService
+) extends NonAskableActor[A] with Serializable {
 
-  override def !(message: A): Unit =
-    netSrv.send(node, message, Some(name))
+  private[conature] def send(message: A, repTo: Actor[Option[Nothing], Any]): Unit =
+    netSrv.send(node, message, Some(address))
 
   override def terminate(): Unit = ()
-  override def isTerminated = false
-  override def isActive = true
-  override def toString(): String = address
 
+  @inline override def isTerminated: Boolean = false
+  @inline override def isActive: Boolean = true
+
+  // TODO: Cache the instance, i.e. implement a concurrent bounded weakreference map.
   @throws(classOf[ObjectStreamException])
-  private def readResolve(): AnyRef = RemoteActor(address, NetworkService.instance).get
+  private def readResolve(): AnyRef =
+    RemoteActor(address, NetworkService.instance).get
 
+  // No type check on the type parameter, unfortunately
   override def equals(that: Any): Boolean = that match {
     case rma: RemoteActor[_] => rma.address == this.address
     case _ => false
@@ -48,7 +51,9 @@ private[remote] object RemoteActor {
       ra
     }
 
-  def apply[A <: Serializable](address: String, netSrv: NetworkService): Try[RemoteActor[A]] =
+  def apply[A <: Serializable](
+      address: String,
+      netSrv: NetworkService): Try[RemoteActor[A]] =
     apply(new URI(address), netSrv)
 
   def apply[A <: Serializable](

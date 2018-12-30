@@ -16,7 +16,7 @@ trait NetworkService extends Extension { netSrv =>
   private[remote] def actorCtx: ActorContext
   private[remote] def nbTcp: NbTransport
   private[remote] def serializer: Serializer
-  private[remote] def remoteMaster: Actor[CommandEventProtocol]
+  private[remote] def remoteMaster: Actor[CommandEventProtocol, Nothing]
 
   def uniqIsa: InetSocketAddress
 
@@ -28,8 +28,14 @@ trait NetworkService extends Extension { netSrv =>
 
   def disconnect(node: InetSocketAddress): Unit
 
-  def register(name: String, actor: Actor[_]): Boolean
-  def lookupLocal(name: String): Option[Actor[Any]]
+  def lookupLocal(name: String): Option[Actor[Any, Any]]
+
+  def bind[A <: Serializable, B]
+      (ra: RemoteActor[A], a: Actor[B, _])
+      (implicit ev: A <:< B)
+      : Option[Actor[Any, Any]]
+
+  def unbind[A <:Serializable](ra: RemoteActor[A]): Option[Actor[A, Any]]
 
   def clientSeverModeMessageHandler: ContextualData => Unit
 
@@ -53,6 +59,41 @@ trait NetworkService extends Extension { netSrv =>
       case Success(ra) => Some(ra)
       case Failure(_) => None
     }
+
+  def locate[A <: Serializable](
+      name: String,
+      isa: InetSocketAddress): Option[RemoteActor[A]] =
+    RemoteActor(name, isa.getHostName, isa.getPort, netSrv) match {
+      case Success(ra) => Some(ra)
+      case Failure(_) => None
+    }
+}
+
+object NetworkService {
+  object Config {
+    var enableDuplexConnection = true
+    var uriStr = "cnt://localhost:9999"
+    var bindHost = "127.0.0.1"
+    var bindPort = 9999
+    var serverMode = true
+    var classicMsgHandler: ContextualData => Unit = (_:ContextualData) => ()
+  }
+
+  def apply(actorCtx: ActorContext): NetworkService = {
+    instance = new NetworkServiceImpl(
+      actorCtx,
+      new Serializer(),
+      Config.uriStr,
+      Config.bindHost,
+      Config.bindPort,
+      Config.serverMode,
+      Config.classicMsgHandler)
+    instance
+  }
+
+  val logger = Log.logger(classOf[NetworkService].getName)
+
+  private[remote] var instance: NetworkService = null
 }
 
 private[remote] class NetworkServiceImpl (
@@ -78,23 +119,25 @@ extends NetworkService {
       new InetSocketAddress("localhost", 9999)
   }
 
-  // val localUri: String = (new URI(s"cnt://${uniqIsa.getHostName}:${uniqIsa.getPort}")).toString
+  private val localActors: CMap[String, Actor[Any, Any]] =
+    TrieMap.empty[String, Actor[Any, Any]]
 
-  private val localActors: CMap[String, Actor[Any]] = TrieMap.empty[String, Actor[Any]]
-
-  private[remote] val remoteMaster: Actor[CommandEventProtocol] =
+  private[remote] val remoteMaster: Actor[CommandEventProtocol, Nothing] =
     actorCtx.spawn(new RemoteMaster(this))
 
   private[remote] var nbTcp: NbTransport =
     new NbTransport(bindHost, bindPort, actorCtx.scheduler)
 
-  def register(name: String, actor: Actor[_]): Boolean =
-    localActors.putIfAbsent(name, actor.asInstanceOf[Actor[Any]]) match {
-      case Some(_) => false
-      case None => true
-    }
+  def bind[A <: Serializable, B]
+      (ra: RemoteActor[A], a: Actor[B, _])
+      (implicit ev: A <:< B)
+      : Option[Actor[Any, Any]] =
+    localActors.put(ra.address, a.asInstanceOf[Actor[Any, Any]])
 
-  def lookupLocal(name: String): Option[Actor[Any]] = localActors.get(name)
+  def unbind[A <:Serializable](ra: RemoteActor[A]): Option[Actor[A, Any]] =
+    localActors.remove(ra.address) map (_.asInstanceOf[Actor[A, Any]])
+
+  def lookupLocal(name: String): Option[Actor[Any, Any]] = localActors.get(name)
 
   override def start(): Unit = {
     nbTcp
@@ -125,31 +168,4 @@ extends NetworkService {
     localActors.clear()
     remoteMaster.terminate()
   }
-}
-
-object NetworkService {
-  object Config {
-    var enableDuplexConnection = true
-    var uriStr = "cnt://localhost:9999"
-    var bindHost = "127.0.0.1"
-    var bindPort = 9999
-    var serverMode = true
-    var classicMsgHandler: ContextualData => Unit = (_:ContextualData) => ()
-  }
-
-  private[remote] var instance: NetworkService = null
-
-  def apply(actorCtx: ActorContext): NetworkService = {
-    instance = new NetworkServiceImpl(
-      actorCtx,
-      new Serializer(),
-      Config.uriStr,
-      Config.bindHost,
-      Config.bindPort,
-      Config.serverMode,
-      Config.classicMsgHandler)
-    instance
-  }
-
-  val logger = Log.logger(classOf[NetworkService].getName)
 }

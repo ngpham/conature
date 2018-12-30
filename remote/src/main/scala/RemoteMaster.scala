@@ -4,16 +4,16 @@ package np.conature.remote
 import java.net.InetSocketAddress
 import java.util.NoSuchElementException
 import scala.collection.mutable.Map
-import np.conature.actor.{ Behavior, Actor }
+import np.conature.actor.{ Behavior, Actor, State }
 import np.conature.util.Log
 import messages._
 
 private[remote] class RemoteMaster(val netSrv: NetworkService)
-extends Behavior[CommandEventProtocol] {
+extends Behavior[CommandEventProtocol, Nothing] {
   val identityToRemoteAddress = Map[InetSocketAddress, InetSocketAddress]()
-  val isaToProxy = Map[InetSocketAddress, Actor[CommandEventProtocol]]()
+  val isaToProxy = Map[InetSocketAddress, Actor[CommandEventProtocol, Nothing]]()
 
-  def apply(cep: CommandEventProtocol): Behavior[CommandEventProtocol] = cep match {
+  def receive(cep: CommandEventProtocol): State[CommandEventProtocol, Nothing] = cep match {
     case SendMessage(_, node, _) =>
       try {
         val proxy = getOrElseCreateLinkTo(node)
@@ -24,16 +24,16 @@ extends Behavior[CommandEventProtocol] {
             NetworkService.logger,
             "Unexpected severe error. {0}: Failed to find/create connection.")
       }
-      Behavior.same
+      State.trivial
     case RemoveAllProxies =>
       isaToProxy.foreach(kv => kv._2 ! ConnectionClosure(null)) // ugly null, but ok
       isaToProxy.clear()
-      Behavior.same
+      State.trivial
     case Disconnect(node) =>
       identityToRemoteAddress.get(node) map { isa: InetSocketAddress =>
         isaToProxy.get(isa) map (proxy => proxy ! Disconnect(node))
       }
-      Behavior.same
+      State.trivial
     case UpdateRemoteIdentity(identity, address) =>
       identityToRemoteAddress.get(identity) map { oldRemoteAddress =>
         // identity -> oldRemoteAddress -> proxy
@@ -45,7 +45,7 @@ extends Behavior[CommandEventProtocol] {
         }
       }
       identityToRemoteAddress += (identity -> address)
-      Behavior.same
+      State.trivial
     case ConnectionAcceptance(sctx) =>
       if (sctx.remoteIdentity ne null) { // complete a pending connection initiated by us
         try {
@@ -63,12 +63,12 @@ extends Behavior[CommandEventProtocol] {
         isaToProxy +=
           (sctx.remoteAddress -> netSrv.actorCtx.spawn(new ActiveProxy(netSrv, sctx)))
       }
-      Behavior.same
+      State.trivial
     case ConnectionAttemptFailure(address) =>
       // identity -> pendingProxy. This is outgoing connection, not yet established.
       isaToProxy.get(address) map (_ ! cep)
       isaToProxy -= address
-      Behavior.same
+      State.trivial
     case ConnectionClosure(sctx) =>
       // Clean up the mapping and the proxy: sctx.remoteAddress -> proxy
       // Remove mapping: sctx.identity -> sctx.remoteAddress, only if any, as identity may be
@@ -81,21 +81,22 @@ extends Behavior[CommandEventProtocol] {
       if (remoteAddress == sctx.remoteAddress) {
         identityToRemoteAddress -= sctx.remoteIdentity
       }
-      Behavior.same
+      State.trivial
     case InboundMessage(sctx, _) =>
       val proxy = isaToProxy.getOrElse(
         sctx.remoteIdentity,
         isaToProxy.getOrElse(sctx.remoteAddress, null))
       if (proxy ne null) proxy ! cep
-      Behavior.same
-    case _ => Behavior.same
+      State.trivial
+    case _ => State.trivial
   }
 
   // If connection is established, we have:
   // identity -> remoteAddress -> proxy   OR   remoteAddress -> proxy (which is not for outbound)
   // If the connection is pending, we have: identity -> proxy
   @throws[NoSuchElementException]
-  private def getOrElseCreateLinkTo(node: InetSocketAddress): Actor[CommandEventProtocol] = {
+  private def getOrElseCreateLinkTo(node: InetSocketAddress)
+      : Actor[CommandEventProtocol, Nothing] = {
     val remoteAddress = identityToRemoteAddress.getOrElse(node, null)
     if (remoteAddress eq null) {
       isaToProxy.getOrElseUpdate(node, {
