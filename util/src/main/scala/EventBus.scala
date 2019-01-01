@@ -52,7 +52,7 @@ trait EventBus[F[-_]] {
           callback(h.asInstanceOf[F[T]], event)
         }
     } else {
-      publish(DeadEvent(event))
+      if (!(typeOf[T] =:= typeOf[DeadEvent])) publish(DeadEvent(event))
     }
   }
 

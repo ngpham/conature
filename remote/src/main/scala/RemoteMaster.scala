@@ -97,6 +97,7 @@ extends Behavior[CommandEventProtocol, Nothing] {
   @throws[NoSuchElementException]
   private def getOrElseCreateLinkTo(node: InetSocketAddress)
       : Actor[CommandEventProtocol, Nothing] = {
+
     val remoteAddress = identityToRemoteAddress.getOrElse(node, null)
     if (remoteAddress eq null) {
       isaToProxy.getOrElseUpdate(node, {

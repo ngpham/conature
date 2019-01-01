@@ -5,7 +5,7 @@ import java.net.InetSocketAddress
 import scala.concurrent.{ Await, Future, Promise }
 import scala.concurrent.duration.{ Duration }
 import scala.io.StdIn
-import np.conature.actor.{ ActorContext, Behavior, Actor, State, NonAskableActor }
+import np.conature.actor.{ ActorContext, Behavior, Actor, State }
 import np.conature.remote.{ NetworkService }
 import np.conature.remote.events.DisconnectEvent
 
@@ -15,10 +15,10 @@ case class ClientCmd(msg: ClientCommand) extends UnionMsg
 
 trait ClientBehavior extends Behavior[UnionMsg, Future[LoginResult]]
 
-class ClientOffline(val myRemoteRef: NonAskableActor[Message])(val hook: Text => Unit)
+class ClientOffline(val myRemoteRef: Actor[Message, Nothing])(val hook: Text => Unit)
 extends ClientBehavior {
   var retries = 0
-  var server: Option[NonAskableActor[Message]] = None
+  var server: Option[Actor[Message, Nothing]] = None
   var prm: Promise[LoginResult] = Promise.successful(LoginFailure)
 
   def receive(msg: UnionMsg) = msg match {
@@ -37,8 +37,8 @@ extends ClientBehavior {
 }
 
 class ClientActive
-  (val myRemoteRef: NonAskableActor[Message],
-   val server: NonAskableActor[Message],
+  (val myRemoteRef: Actor[Message, Nothing],
+   val server: Actor[Message, Nothing],
    val ssid: String)
   (val hook: Text => Unit)
 extends ClientBehavior {
@@ -48,7 +48,7 @@ extends ClientBehavior {
       State.trivial
     case ClientCmd(DoLogout) =>
       server ! Logout(ssid)
-      State(new ClientOffline(myRemoteRef: NonAskableActor[Message])(hook), None)
+      State(new ClientOffline(myRemoteRef)(hook), None)
     case ServerMsg(m @ Text(_, _)) =>
       hook(m)
       State.trivial
@@ -74,10 +74,10 @@ object Client {
     context.register("netsrv")(nsr)
     context.start()
 
-    val srv = nsr.locate[Message](
+    val srv = nsr.locate[Message, Nothing](
         s"cnt://chatservice@localhost:${args(1)}").get
 
-    val endpoint = nsr.locate[Message](
+    val endpoint = nsr.locate[Message, Nothing](
         s"cnt://client@localhost:${args(0)}").get
 
     val client = context.spawn(new ClientOffline(endpoint)(text =>

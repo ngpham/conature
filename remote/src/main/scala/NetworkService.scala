@@ -6,6 +6,7 @@ import scala.util.{ Try, Success, Failure }
 import scala.concurrent.Promise
 import scala.collection.concurrent.{ Map => CMap, TrieMap }
 import np.conature.actor.{ ActorContext, Actor, Extension }
+import Actor.{ AnyActor, ActorAny }
 import np.conature.nbnet.NbTransport
 import np.conature.util.Log
 import messages.{ DataMessage, SendMessage, InboundMessage, ConnectionAcceptance,
@@ -17,6 +18,8 @@ trait NetworkService extends Extension { netSrv =>
   private[remote] def nbTcp: NbTransport
   private[remote] def serializer: Serializer
   private[remote] def remoteMaster: Actor[CommandEventProtocol, Nothing]
+  private[remote] def askBroker: Actor[RemoteAskProto, Nothing]
+  private[remote] def askBrokerRemote: RemoteActor[RemoteAskProto, Nothing]
 
   def uniqIsa: InetSocketAddress
 
@@ -28,41 +31,40 @@ trait NetworkService extends Extension { netSrv =>
 
   def disconnect(node: InetSocketAddress): Unit
 
-  def lookupLocal(name: String): Option[Actor[Any, Any]]
+  def lookupLocal(name: String): Option[ActorAny]
 
-  def bind[A <: Serializable, B]
-      (ra: RemoteActor[A], a: Actor[B, _])
-      (implicit ev: A <:< B)
-      : Option[Actor[Any, Any]]
+  def bind[A <: Serializable, X, B, Y]
+      (ra: RemoteActor[A, X], a: Actor[B, Y])
+      (implicit ev1: A <:< B, ev2: Y <:< X): Option[Actor[Any, Any]]
 
-  def unbind[A <:Serializable](ra: RemoteActor[A]): Option[Actor[A, Any]]
+  def unbind[A <:Serializable, X](ra: RemoteActor[A, X]): Option[Actor[A, X]]
 
   def clientSeverModeMessageHandler: ContextualData => Unit
 
-  def locate[A <: Serializable](actorAdr: String): Option[RemoteActor[A]] =
+  def locate[A <: Serializable, X](actorAdr: String): Option[RemoteActor[A, X]] =
     RemoteActor(actorAdr, netSrv) match {
       case Success(ra) => Some(ra)
       case Failure(_) => None
     }
 
-  def locate[A <: Serializable](uri: URI): Option[RemoteActor[A]] =
+  def locate[A <: Serializable, X](uri: URI): Option[RemoteActor[A, X]] =
     RemoteActor(uri, netSrv) match {
       case Success(ra) => Some(ra)
       case Failure(_) => None
     }
 
-  def locate[A <: Serializable](
+  def locate[A <: Serializable, X](
       name: String,
       host: String,
-      port: Int): Option[RemoteActor[A]] =
+      port: Int): Option[RemoteActor[A, X]] =
     RemoteActor(name, host, port, netSrv) match {
       case Success(ra) => Some(ra)
       case Failure(_) => None
     }
 
-  def locate[A <: Serializable](
+  def locate[A <: Serializable, X](
       name: String,
-      isa: InetSocketAddress): Option[RemoteActor[A]] =
+      isa: InetSocketAddress): Option[RemoteActor[A, X]] =
     RemoteActor(name, isa.getHostName, isa.getPort, netSrv) match {
       case Success(ra) => Some(ra)
       case Failure(_) => None
@@ -78,6 +80,8 @@ object NetworkService {
     var serverMode = true
     var classicMsgHandler: ContextualData => Unit = (_:ContextualData) => ()
   }
+
+  val brokerName = "cnt.broker"
 
   def apply(actorCtx: ActorContext): NetworkService = {
     instance = new NetworkServiceImpl(
@@ -119,25 +123,37 @@ extends NetworkService {
       new InetSocketAddress("localhost", 9999)
   }
 
-  private val localActors: CMap[String, Actor[Any, Any]] =
-    TrieMap.empty[String, Actor[Any, Any]]
+  private val localActors: CMap[String, AnyActor] =
+    TrieMap.empty[String, AnyActor]
 
   private[remote] val remoteMaster: Actor[CommandEventProtocol, Nothing] =
     actorCtx.spawn(new RemoteMaster(this))
 
+  // Is this guarantee that jvm executes val field initialization in order?
+  // If not bind(askBrokerRemote, a) will fail.
+  // Using lazy val to ensure initialization.
+  private[remote] lazy val askBrokerRemote =
+    locate[RemoteAskProto, Nothing](NetworkService.brokerName, uniqIsa).get
+
+  private[remote] val askBroker: Actor[RemoteAskProto, Nothing] = {
+    val a = actorCtx.spawn(new RemoteAskBroker(this))
+    bind(askBrokerRemote, a)
+    a
+  }
+
   private[remote] var nbTcp: NbTransport =
     new NbTransport(bindHost, bindPort, actorCtx.scheduler)
 
-  def bind[A <: Serializable, B]
-      (ra: RemoteActor[A], a: Actor[B, _])
-      (implicit ev: A <:< B)
-      : Option[Actor[Any, Any]] =
-    localActors.put(ra.address, a.asInstanceOf[Actor[Any, Any]])
+  def bind[A <: Serializable, X, B, Y]
+      (ra: RemoteActor[A, X], a: Actor[B, Y])
+      (implicit ev1: A <:< B, ev2: Y <:< X): Option[ActorAny] =
+    localActors.put(ra.address, a).asInstanceOf[Option[ActorAny]]
 
-  def unbind[A <:Serializable](ra: RemoteActor[A]): Option[Actor[A, Any]] =
-    localActors.remove(ra.address) map (_.asInstanceOf[Actor[A, Any]])
+  def unbind[A <:Serializable, X](ra: RemoteActor[A, X]): Option[Actor[A, X]] =
+    localActors.remove(ra.address) map (_.asInstanceOf[Actor[A, X]])
 
-  def lookupLocal(name: String): Option[Actor[Any, Any]] = localActors.get(name)
+  def lookupLocal(name: String): Option[ActorAny] =
+    localActors.get(name).asInstanceOf[Option[ActorAny]]
 
   override def start(): Unit = {
     nbTcp

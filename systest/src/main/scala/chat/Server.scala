@@ -5,15 +5,15 @@ import java.util.UUID
 import scala.collection.{ mutable => mc }
 import scala.concurrent.duration.Duration
 
-import np.conature.actor.{ ActorContext, Behavior, State, NonAskableActor }
+import np.conature.actor.{ ActorContext, Behavior, State, Actor }
 import np.conature.remote.NetworkService
 import np.conature.remote.events.DisconnectEvent
 
-class ServerAct(val limit: Int, val address: NonAskableActor[Message])
+class ServerAct(val limit: Int, val address: Actor[Message, Nothing])
 extends Behavior[Message, Nothing] {
   private var count = 0
-  private val ssidToClient: mc.Map[String, NonAskableActor[Message]] = mc.Map()
-  private val clientToSsid: mc.Map[NonAskableActor[Message], String] = mc.Map()
+  private val ssidToClient: mc.Map[String, Actor[Message, Nothing]] = mc.Map()
+  private val clientToSsid: mc.Map[Actor[Message, Nothing], String] = mc.Map()
 
   def receive(msg: Message): State[Message, Nothing] = msg match {
     case Login(user) =>
@@ -64,7 +64,7 @@ object Server {
     context.register("netsrv")(netsrv)
     context.start()
 
-    val address = netsrv.locate[Message](
+    val address = netsrv.locate[Message, Nothing](
       s"cnt://chatservice@localhost:${args(0)}").get
 
     val srv = context.spawn(new ServerAct(args(1).toInt, address))

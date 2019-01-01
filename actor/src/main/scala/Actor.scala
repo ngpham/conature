@@ -13,7 +13,8 @@ trait Actor[-A, +R] {
 
   private[conature] def send(message: A, repTo: Actor[Option[R], Any]): Unit
 
-  // Safety: if actor is terminated, Future should fail fast
+  // Safety: if actor is terminated, Future should fail fast.
+  // Hence the use of Option[R] in repTo type.
   def ?(message: A, timeout: Duration = Duration.Inf): Future[R]
 
   def terminate(): Unit = ()
@@ -23,8 +24,9 @@ trait Actor[-A, +R] {
 }
 
 class NonAskableException(msg: String) extends Exception(msg: String) {}
+class AskFailureException(msg: String) extends Exception(msg: String) {}
 
-trait NonAskableActor[-A] extends Actor[A, Nothing] {
+trait NonAskableActor[-A] { this: Actor[A, Nothing] =>
   def ?(message: A, timeout: Duration = Duration.Inf): Future[Nothing] =
     Future.failed[Nothing](
       new NonAskableException(s"NonAskableActor $this is not questionable!"))
@@ -65,6 +67,10 @@ trait Behavior[-A, +R] {
   private[actor] var timeoutAction: () => Unit = Misc.Nop
   private[actor] var timeoutDuration: Duration = Duration.Undefined
 
+  // type checked during Actor.send(), thus we are safe to cheat, for delegate()
+  private[actor] var sender: Actor.ActorAny = Actor.empty
+  private[actor] var shouldReplyToSender: Boolean = true
+
   private[actor]
   def updateSelf(a: ActorImplementation[A @uncheckedVariance, R @uncheckedVariance]): Unit =
     inner = a
@@ -72,20 +78,29 @@ trait Behavior[-A, +R] {
   def selfref: Actor[A, R] = inner
   def context = inner.context
 
-  def setTimeout(duration: Duration)(callback: => Unit) = {
+  protected def delegate[B, C](msg: B, a: Actor[C, R @uncheckedVariance])
+  (implicit ev: B <:< C): Unit = {
+    shouldReplyToSender = false
+    a.send(msg, sender)
+    ()
+  }
+
+  protected def setTimeout(duration: Duration)(callback: => Unit) = {
     if (timeoutAction ne Misc.Nop) inner.cancelTimeout()
     timeoutDuration = duration
     timeoutAction = () => callback
   }
-  def removeTimeout(): Unit = {
+  protected def removeTimeout(): Unit = {
     disableTimeout()
     timeoutAction = Misc.Nop
   }
-  def disableTimeout(): Unit = {
+  protected def disableTimeout(): Unit = {
     inner.cancelTimeout()
     timeoutDuration = Duration.Undefined
   }
-  def enableTimeout(duration: FiniteDuration): Unit = { timeoutDuration = duration }
+  protected def enableTimeout(duration: FiniteDuration): Unit = { timeoutDuration = duration }
+
+  protected[actor] def postInit(): Unit = ()
 }
 
 private[actor] case class Mail[A, R](message: A, repTo: Actor[Option[R], Any])
@@ -153,12 +168,13 @@ extends JActor with Actor[A, R] { actorAR =>
 
   private[this] val mboxAct: Consumer[Mail[A, R]] = (mail: Mail[A, R]) => {
     val state = try {
+      behavior.sender = mail.repTo.asInstanceOf[Actor.ActorAny]
       behavior.receive(mail.message)
     } catch {
       case ex: Throwable => State(onError(ex), None)
     }
 
-    mail.repTo ! state.reply
+    if (behavior.shouldReplyToSender) behavior.sender ! state.reply
 
     if (isTerminated) {
       stayTerminated()
@@ -167,7 +183,10 @@ extends JActor with Actor[A, R] { actorAR =>
     } else if ((state.behavior ne Behavior.same) && (state.behavior ne behavior)) {
       cancelTimeout()
       state.behavior.updateSelf(actorAR)
+      state.behavior.postInit()
       behavior = state.behavior
+    } else {
+      behavior.shouldReplyToSender = true
     }
   }
 
@@ -196,18 +215,22 @@ private[actor] object ActorImplementation {
       (context: ActorContext): Actor[A, R] = {
     val actor = new ActorImplementation(behavior, onError)(context)
     behavior.updateSelf(actor)
+    behavior.postInit()
     actor.scheduleTimeout()
     actor
   }
 }
 
 object Actor {
+  type AnyActor = Actor[Nothing, Any]
+  type ActorAny = Actor[Any, Nothing]
+
   private[actor] def apply[A, R]
       (behavior: Behavior[A, R], onError: Throwable => Behavior[A, R])
       (context: ActorContext): Actor[A, R] =
     ActorImplementation(behavior, onError)(context)
 
-  val empty: NonAskableActor[Any] = new NonAskableActor[Any] {
+  val empty: ActorAny = new ActorAny with NonAskableActor[Any] {
     private[conature]
     def send(message: Any, repTo: Actor[Option[Nothing], Any]) = ()
 

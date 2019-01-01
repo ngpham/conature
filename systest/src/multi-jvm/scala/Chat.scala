@@ -33,10 +33,10 @@ class ClientController(port: Int, numMsg: Int) {
     context.register("netsrv")(nsr)
     context.start()
 
-    val srv = nsr.locate[Message](
+    val srv = nsr.locate[Message, Nothing](
         s"cnt://chatservice@localhost:9999").get
 
-    val endpoint = nsr.locate[Message](
+    val endpoint = nsr.locate[Message, Nothing](
         s"cnt://client@localhost:$port").get
 
     val client = context.spawn(new ClientOffline(endpoint)((msg: Text) => {

@@ -35,10 +35,10 @@ trait ActorContext extends Dynamic { context =>
         }
       })
 
-  def ask[A, B, X >: A](
+  def ask[A, B, X](
       actor: Actor[X, B],
       message: A,
-      timeout: Duration = Duration.Inf): Future[B]
+      timeout: Duration = Duration.Inf)(implicit ev: A <:< X): Future[B]
 
   // Thin adapter: Actor[A, X] is adapted as Actor[B, Y] - which just performs forwarding.
   // The use case is rare, i.e. for a given sealed/final message type A, if we have to extend
@@ -81,10 +81,10 @@ trait ActorContext extends Dynamic { context =>
 }
 
 private[actor] trait ActorContextPattern { context: ActorContext =>
-  override def ask[A, B, X >: A](
+  override def ask[A, B, X](
       actor: Actor[X, B],
       message: A,
-      timeout: Duration = Duration.Inf): Future[B] = {
+      timeout: Duration = Duration.Inf)(implicit ev: A <:< X): Future[B] = {
 
     val prm = Promise[B]()
     val shortLife = context.spawn(new Behavior[Option[B], Nothing] {
