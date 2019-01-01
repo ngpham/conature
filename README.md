@@ -152,8 +152,7 @@ Conature takes care of correct logic and type safety:
 ```scala
 trait Behavior[-A, +R] {
   def receive(message: A): State[A, R]
-  protected def delegate[B, C](msg: B, a: Actor[C, R @uncheckedVariance])
-                              (implicit ev: B <:< C): Unit
+  protected def delegate[B, C](msg: B, a: Actor[C, R @uncheckedVariance])(implicit ev: B <:< C): Unit
 }
 ```
 The delegation is more general than forwaring. It is not limited to messages of the same type `A`,
@@ -194,11 +193,11 @@ test
 systest/multi-jvm:run np.conature.systest.multijvm.Chat
 systest/multi-jvm:run np.conature.systest.multijvm.NetworkAsk
 ```
-For convenience, let's have a wall through with `NetworkAsk`, which will demon strates: error
-reovery, delegation to workers, networking, and ask pattern.
+For convenience, let's have a walk through with `NetworkAsk`, which will demonstrate: error
+recovery, delegation to workers, networking, and ask pattern.
 
 NetworkAsk includes a server that takes request to compute a boring Fibonacci number. The man
-actor receives the request and delagates
+actor receives the request and delegates
 the task to worker-actors, and set them to auto restart should them fail. The clients does not
 use any actor, but employs `ask` as a form of RPC.
 
@@ -221,7 +220,7 @@ class FiboBehavior(val workerId: Int) extends Behavior[FiboMessage, FiboMessage]
   }
 }
 ```
-The server actor is also a single behavior, which override the `postInit()` to create its workers.
+The server actor is also a single behavior, which overrides the `postInit()` to create its workers.
 ```scala
 class FiboLoadBalancer(val conLev: Int = 4) extends Behavior[FiboMessage, FiboMessage] {
   var workers: Seq[Actor[FiboMessage, FiboMessage]] = Seq.empty
@@ -273,7 +272,7 @@ context.eventBus.subscribe(
 latch.await()
 context.stop()
 ```
-The client does not need any actors, but it need the actor system to handle ask/reply.
+The client does not need any actors, but it needs the actor system to handle ask/reply.
 ```scala
 NetworkService.Config.uriStr = s"cnt://localhost:8888" // unique uri, but will not listen
 NetworkService.Config.bindPort = 8888
@@ -299,7 +298,7 @@ while (!done) {
   }
 }
 // Make more RPC calls, notice that asked Futures can complete in any order, which is a good thing.
-// If you want ordering, the code must Await after each ask.
+// If we want ordering, the code must Await after each ask.
 val reqs = List(1,2,3,4,5,6,7,8,9,10)
 val futs = reqs.map(e => fiboServer ? FiboRequest(e))
 implicit val ec = context.strategy
